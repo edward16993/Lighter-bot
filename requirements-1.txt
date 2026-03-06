@@ -1,0 +1,4 @@
+python-telegram-bot==20.7
+httpx==0.26.0
+pandas==2.1.4
+numpy==1.26.3
