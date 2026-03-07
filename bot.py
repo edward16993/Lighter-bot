@@ -64,13 +64,21 @@ for t in MARKETS:
     all_stats[t] = load_stats(t)
 
 async def fetch_closes(symbol, limit=100):
+    # Try Futures API first (for HYPE, ETH perpetuals), fallback to Spot
+    endpoints = [
+        "https://fapi.binance.com/fapi/v1/klines",  # Futures
+        "https://api.binance.com/api/v3/klines",     # Spot
+    ]
     async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.get("https://api.binance.com/api/v3/klines",
-                        params={"symbol": symbol, "interval": "15m", "limit": limit})
-        data = r.json()
-        if not isinstance(data, list) or len(data) == 0:
-            raise Exception(f"No data for {symbol}: {data}")
-        return [float(x[4]) for x in data]
+        for url in endpoints:
+            try:
+                r = await c.get(url, params={"symbol": symbol, "interval": "15m", "limit": limit})
+                data = r.json()
+                if isinstance(data, list) and len(data) > 0:
+                    return [float(x[4]) for x in data]
+            except Exception:
+                continue
+    raise Exception(f"No data for {symbol}: not found on Futures or Spot")
 
 def calc_indicators(closes):
     s   = pd.Series(closes)
@@ -111,7 +119,7 @@ def record_close(token, exit_price):
     s["total_trades"] += 1; s["total_pnl"] += pnl
     s["current_margin"] = new_m
     if new_m > s["peak_margin"]: s["peak_margin"] = new_m
-    result = "✅ WIN" if pnl >= 0 else "❌ LOSS"
+    result = "âœ… WIN" if pnl >= 0 else "âŒ LOSS"
     if pnl >= 0: s["wins"] += 1
     else:        s["losses"] += 1
     s["history"].append({"no": s["total_trades"], "entry": s["entry_price"],
@@ -129,7 +137,7 @@ async def send_tg(msg):
         logger.error(f"TG: {e}")
 
 async def token_loop(token):
-    icon = "🔷" if token == "ETH" else "🔶"
+    icon = "ðŸ”·" if token == "ETH" else "ðŸ”¶"
     while True:
         try:
             closes = await fetch_closes(MARKETS[token]["symbol"])
@@ -144,8 +152,8 @@ async def token_loop(token):
                 size   = calc_size(token, margin, price)
                 await send_tg(
                     f"{icon} *{token} BUY!*\n"
-                    f"Price:`${price:.{dec}f}` ≤ Lower:`${lower}`\n"
-                    f"RSI:`{rsi}` | `${margin}`×`{LEVERAGE}x`\n"
+                    f"Price:`${price:.{dec}f}` â‰¤ Lower:`${lower}`\n"
+                    f"RSI:`{rsi}` | `${margin}`Ã—`{LEVERAGE}x`\n"
                     f"Size:`{size} {token}` | _Executing..._"
                 )
                 try:
@@ -153,13 +161,13 @@ async def token_loop(token):
                     positions[token] = True
                     s["entry_price"] = price; s["entry_size"] = size; s["entry_margin"] = margin
                     save_stats(token)
-                    await send_tg(f"✅ *{token} LONG Opened!* Entry:`${price:.{dec}f}`")
+                    await send_tg(f"âœ… *{token} LONG Opened!* Entry:`${price:.{dec}f}`")
                 except Exception as e:
                     positions[token] = False
-                    await send_tg(f"❌ {token} BUY Failed: `{e}`")
+                    await send_tg(f"âŒ {token} BUY Failed: `{e}`")
 
             elif close_sig and positions[token]:
-                await send_tg(f"{icon} *{token} CLOSE!* Price:`${price:.{dec}f}` ≥ Upper:`${upper}`")
+                await send_tg(f"{icon} *{token} CLOSE!* Price:`${price:.{dec}f}` â‰¥ Upper:`${upper}`")
                 try:
                     await place_order(token, "SELL", s["entry_size"], price, reduce_only=True)
                     positions[token] = False
@@ -168,58 +176,59 @@ async def token_loop(token):
                     await send_tg(
                         f"{outcome} *{token} #{s['total_trades']}*\n"
                         f"PnL:`${pnl:+.4f}` | Margin:`${new_m}`\n"
-                        f"WR:`{wr}%` | Next:`${new_m}`×`{LEVERAGE}x` 🚀"
+                        f"WR:`{wr}%` | Next:`${new_m}`Ã—`{LEVERAGE}x` ðŸš€"
                     )
                 except Exception as e:
                     positions[token] = False
-                    await send_tg(f"❌ {token} CLOSE Failed: `{e}`")
+                    await send_tg(f"âŒ {token} CLOSE Failed: `{e}`")
         except Exception as e:
             logger.error(f"{token}: {e}")
         await asyncio.sleep(CHECK_INTERVAL)
 
 async def strategy_loop():
     await send_tg(
-        "🤖 *Bot Started!*\n"
-        f"🔷 ETH `${MARKETS['ETH']['start_margin']}` | 🔶 HYPE `${MARKETS['HYPE']['start_margin']}`\n"
-        f"⚡ {LEVERAGE}x | BB+RSI | 15min ✅"
+        "ðŸ¤– *Bot Started!*\n"
+        f"ðŸ”· ETH `${MARKETS['ETH']['start_margin']}` | ðŸ”¶ HYPE `${MARKETS['HYPE']['start_margin']}`\n"
+        f"âš¡ {LEVERAGE}x | BB+RSI | 15min âœ…"
     )
     await asyncio.gather(token_loop("ETH"), token_loop("HYPE"))
 
 async def cmd_start(u: Update, c: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_text(
-        f"🤖 ETH:`${all_stats['ETH']['current_margin']}` HYPE:`${all_stats['HYPE']['current_margin']}`\n"
+        f"ðŸ¤– ETH:`${all_stats['ETH']['current_margin']}` HYPE:`${all_stats['HYPE']['current_margin']}`\n"
         "/status /bb /stats /history /balance", parse_mode="Markdown")
 
 async def cmd_status(u: Update, c: ContextTypes.DEFAULT_TYPE):
     try:
-        ec = await fetch_closes("ETHUSDT")
-        hc = await fetch_closes("HYPEUSDT")
+        ec = await fetch_closes(MARKETS["ETH"]["symbol"])
+        hc = await fetch_closes(MARKETS["HYPE"]["symbol"])
         ep = ec[-1]
         hp = hc[-1]
         _,_,_,er,_,_ = calc_indicators(ec)
         _,_,_,hr,_,_ = calc_indicators(hc)
-        es = "🟢 LONG" if positions["ETH"] else "⚪ Wait"
-        hs = "🟢 LONG" if positions["HYPE"] else "⚪ Wait"
+        es = "ðŸŸ¢ LONG" if positions["ETH"] else "âšª Wait"
+        hs = "ðŸŸ¢ LONG" if positions["HYPE"] else "âšª Wait"
         await u.message.reply_text(
-            f"🔷 ETH:`${ep:,.2f}` RSI:`{er}` {es}\nMargin:`${all_stats['ETH']['current_margin']}`\n"
-            f"━━━━━━━━━━━━━━━\n"
-            f"🔶 HYPE:`${hp:.4f}` RSI:`{hr}` {hs}\nMargin:`${all_stats['HYPE']['current_margin']}`",
+            f"ðŸ”· ETH:`${ep:,.2f}` RSI:`{er}` {es}\nMargin:`${all_stats['ETH']['current_margin']}`\n"
+            f"â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n"
+            f"ðŸ”¶ HYPE:`${hp:.4f}` RSI:`{hr}` {hs}\nMargin:`${all_stats['HYPE']['current_margin']}`",
             parse_mode="Markdown")
     except Exception as e:
-        await u.message.reply_text(f"❌ Error: {e}")
+        await u.message.reply_text(f"âŒ Error: {e}")
 
 async def cmd_bb(u: Update, c: ContextTypes.DEFAULT_TYPE):
     try:
-        ec = await fetch_closes("ETHUSDT"); hc = await fetch_closes("HYPEUSDT")
+        ec = await fetch_closes(MARKETS["ETH"]["symbol"])
+        hc = await fetch_closes(MARKETS["HYPE"]["symbol"])
         eu,em,el,er,eb,ec2 = calc_indicators(ec)
         hu,hm,hl,hr,hb,hc2 = calc_indicators(hc)
-        ez = "🟢 BUY!" if eb else ("🔴 CLOSE!" if ec2 else "🟡 Wait")
-        hz = "🟢 BUY!" if hb else ("🔴 CLOSE!" if hc2 else "🟡 Wait")
+        ez = "ðŸŸ¢ BUY!" if eb else ("ðŸ”´ CLOSE!" if ec2 else "ðŸŸ¡ Wait")
+        hz = "ðŸŸ¢ BUY!" if hb else ("ðŸ”´ CLOSE!" if hc2 else "ðŸŸ¡ Wait")
         await u.message.reply_text(
-            f"🔷 ETH RSI:`{er}` {ez}\nU:`${eu}` M:`${em}` L:`${el}`\n"
-            f"🔶 HYPE RSI:`{hr}` {hz}\nU:`${hu}` M:`${hm}` L:`${hl}`",
+            f"ðŸ”· ETH RSI:`{er}` {ez}\nU:`${eu}` M:`${em}` L:`${el}`\n"
+            f"ðŸ”¶ HYPE RSI:`{hr}` {hz}\nU:`${hu}` M:`${hm}` L:`${hl}`",
             parse_mode="Markdown")
-    except Exception as e: await u.message.reply_text(f"❌ {e}")
+    except Exception as e: await u.message.reply_text(f"âŒ {e}")
 
 async def cmd_stats(u: Update, c: ContextTypes.DEFAULT_TYPE):
     msg = ""
@@ -227,20 +236,20 @@ async def cmd_stats(u: Update, c: ContextTypes.DEFAULT_TYPE):
         s = all_stats[token]; t = s["total_trades"]
         wr = round(s["wins"]/max(t,1)*100,1)
         g  = round(s["current_margin"]-MARKETS[token]["start_margin"],4)
-        icon = "🔷" if token=="ETH" else "🔶"
+        icon = "ðŸ”·" if token=="ETH" else "ðŸ”¶"
         msg += f"{icon} *{token}* T:`{t}` WR:`{wr}%` M:`${s['current_margin']}` G:`${g:+.4f}`\n"
     await u.message.reply_text(msg, parse_mode="Markdown")
 
 async def cmd_history(u: Update, c: ContextTypes.DEFAULT_TYPE):
     msg = ""
     for token in MARKETS:
-        icon = "🔷" if token=="ETH" else "🔶"
+        icon = "ðŸ”·" if token=="ETH" else "ðŸ”¶"
         h = all_stats[token].get("history",[])
         msg += f"{icon} *{token}*\n"
         if not h: msg += "No trades\n"
         else:
             for t in reversed(h[-3:]):
-                msg += f"{t['result']} #{t['no']} `${t['pnl']:+.4f}` `${t['old_margin']}→${t['new_margin']}`\n"
+                msg += f"{t['result']} #{t['no']} `${t['pnl']:+.4f}` `${t['old_margin']}â†’${t['new_margin']}`\n"
     await u.message.reply_text(msg, parse_mode="Markdown")
 
 async def cmd_balance(u: Update, c: ContextTypes.DEFAULT_TYPE):
@@ -249,8 +258,8 @@ async def cmd_balance(u: Update, c: ContextTypes.DEFAULT_TYPE):
         acc = lighter.AccountApi(api)
         r   = await acc.account(account_index=ACCOUNT_INDEX)
         await api.close()
-        await u.message.reply_text(f"💰 Collateral:`{r.collateral}`", parse_mode="Markdown")
-    except Exception as e: await u.message.reply_text(f"❌ {e}")
+        await u.message.reply_text(f"ðŸ’° Collateral:`{r.collateral}`", parse_mode="Markdown")
+    except Exception as e: await u.message.reply_text(f"âŒ {e}")
 
 async def main():
     global tg_app, signer_client
