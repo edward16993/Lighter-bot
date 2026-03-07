@@ -1,2 +1,4 @@
-python-telegram-bot==21.5
+lighter-sdk
+python-telegram-bot[job-queue]==20.7
 pandas
+httpx
