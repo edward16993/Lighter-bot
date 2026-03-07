@@ -36,6 +36,10 @@ MARKETS = {
     }
 }
 
+# Binance symbol override from env
+MARKETS["ETH"]["symbol"]  = os.environ.get("ETH_SYMBOL",  "ETHUSDT")
+MARKETS["HYPE"]["symbol"] = os.environ.get("HYPE_SYMBOL", "HYPEUSDT")
+
 positions     = {"ETH": False, "HYPE": False}
 all_stats     = {}
 signer_client = None
@@ -63,7 +67,10 @@ async def fetch_closes(symbol, limit=100):
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.get("https://api.binance.com/api/v3/klines",
                         params={"symbol": symbol, "interval": "15m", "limit": limit})
-        return [float(x[4]) for x in r.json()]
+        data = r.json()
+        if not isinstance(data, list) or len(data) == 0:
+            raise Exception(f"No data for {symbol}: {data}")
+        return [float(x[4]) for x in data]
 
 def calc_indicators(closes):
     s   = pd.Series(closes)
@@ -185,16 +192,21 @@ async def cmd_start(u: Update, c: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_status(u: Update, c: ContextTypes.DEFAULT_TYPE):
     try:
-        ec = await fetch_closes("ETHUSDT"); hc = await fetch_closes("HYPEUSDT")
-        ep = ec[-1]; hp = hc[-1]
-        _,_,_,er,_,_ = calc_indicators(ec); _,_,_,hr,_,_ = calc_indicators(hc)
+        ec = await fetch_closes("ETHUSDT")
+        hc = await fetch_closes("HYPEUSDT")
+        ep = ec[-1]
+        hp = hc[-1]
+        _,_,_,er,_,_ = calc_indicators(ec)
+        _,_,_,hr,_,_ = calc_indicators(hc)
         es = "🟢 LONG" if positions["ETH"] else "⚪ Wait"
         hs = "🟢 LONG" if positions["HYPE"] else "⚪ Wait"
-    except: ep=hp=er=hr=0; es=hs="N/A"
-    await u.message.reply_text(
-        f"🔷 ETH:`${ep:,.2f}` RSI:`{er}` {es} Margin:`${all_stats['ETH']['current_margin']}`\n"
-        f"🔶 HYPE:`${hp:.4f}` RSI:`{hr}` {hs} Margin:`${all_stats['HYPE']['current_margin']}`",
-        parse_mode="Markdown")
+        await u.message.reply_text(
+            f"🔷 ETH:`${ep:,.2f}` RSI:`{er}` {es}\nMargin:`${all_stats['ETH']['current_margin']}`\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"🔶 HYPE:`${hp:.4f}` RSI:`{hr}` {hs}\nMargin:`${all_stats['HYPE']['current_margin']}`",
+            parse_mode="Markdown")
+    except Exception as e:
+        await u.message.reply_text(f"❌ Error: {e}")
 
 async def cmd_bb(u: Update, c: ContextTypes.DEFAULT_TYPE):
     try:
