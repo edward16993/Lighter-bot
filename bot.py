@@ -14,8 +14,8 @@ LIGHTER_API_KEY    = os.environ.get("LIGHTER_API_KEY", "")
 LIGHTER_SECRET     = os.environ.get("LIGHTER_SECRET", "")
 STARTING_MARGIN    = float(os.environ.get("STARTING_MARGIN", "5"))
 
-LEVERAGE       = 5
-RSI_BUY        = 30
+LEVERAGE       = 6
+RSI_BUY        = 35
 RSI_CLOSE      = 70
 RSI_PERIOD     = 14
 CHECK_INTERVAL = 900
