@@ -2,6 +2,7 @@ import os, asyncio, logging, json
 from datetime import datetime
 import httpx
 import pandas as pd
+import numpy as np
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -14,12 +15,12 @@ LIGHTER_API_KEY    = os.environ.get("LIGHTER_API_KEY", "")
 LIGHTER_SECRET     = os.environ.get("LIGHTER_SECRET", "")
 STARTING_MARGIN    = float(os.environ.get("STARTING_MARGIN", "5"))
 
-LEVERAGE       = 5
-EMA_FAST       = 20
-EMA_SLOW       = 50
+LEVERAGE       = 6
+BB_PERIOD      = 20
+BB_STD         = 2
 RSI_PERIOD     = 14
-RSI_BUY        = 40   # RSI < 40 (Oversold)
-RSI_CLOSE      = 65   # RSI > 65 (Overbought)
+RSI_BUY        = 45
+RSI_CLOSE      = 55
 CHECK_INTERVAL = 900  # 15 minutes
 
 STATS_FILE  = "stats.json"
@@ -61,18 +62,26 @@ async def fetch_closes(limit=100):
 def calc_indicators(closes):
     s = pd.Series(closes)
 
-    # EMA
-    ema_fast = float(s.ewm(span=EMA_FAST, adjust=False).mean().iloc[-1])
-    ema_slow = float(s.ewm(span=EMA_SLOW, adjust=False).mean().iloc[-1])
+    # Bollinger Bands
+    sma    = s.rolling(BB_PERIOD).mean()
+    std    = s.rolling(BB_PERIOD).std()
+    upper  = round(float((sma + BB_STD * std).iloc[-1]), 2)
+    middle = round(float(sma.iloc[-1]), 2)
+    lower  = round(float((sma - BB_STD * std).iloc[-1]), 2)
 
     # RSI
     d    = s.diff()
     gain = d.where(d > 0, 0.0).ewm(com=RSI_PERIOD-1, adjust=False).mean()
     loss = (-d.where(d < 0, 0.0)).ewm(com=RSI_PERIOD-1, adjust=False).mean()
-    rs   = gain / loss
-    rsi  = float((100 - (100 / (1 + rs))).iloc[-1])
+    rsi  = round(float((100 - (100 / (1 + gain / loss))).iloc[-1]), 2)
 
-    return round(ema_fast, 2), round(ema_slow, 2), round(rsi, 2)
+    price = closes[-1]
+
+    # Signals
+    buy_signal   = price <= lower and rsi < RSI_BUY
+    close_signal = price >= upper
+
+    return upper, middle, lower, rsi, buy_signal, close_signal
 
 async def lighter_order(side, size, reduce_only=False):
     payload = {
@@ -140,43 +149,39 @@ async def send_tg(msg):
 
 async def strategy_loop():
     global in_position, stats
-    logger.info("EMA+RSI Strategy loop started!")
+    logger.info("Bollinger+RSI Strategy started!")
 
     await send_tg(
-        "🤖 *Lighter DEX EMA+RSI Bot Started!*\n"
+        "🤖 *Lighter DEX Bollinger+RSI Bot!*\n"
         "━━━━━━━━━━━━━━━\n"
         f"📊 ETH-USDC | ⚡ {LEVERAGE}x | ⏱ 15min\n"
-        f"📈 EMA: `{EMA_FAST}` / `{EMA_SLOW}`\n"
-        f"🟢 BUY: EMA{EMA_FAST} > EMA{EMA_SLOW} + RSI < {RSI_BUY}\n"
-        f"🔴 CLOSE: RSI > {RSI_CLOSE}\n"
+        f"🟢 BUY: Lower Band touch + RSI < {RSI_BUY}\n"
+        f"🔴 CLOSE: Upper Band touch\n"
+        f"📈 BB Period: {BB_PERIOD} | Std: {BB_STD}\n"
         f"💵 Margin: `${stats['current_margin']}`\n"
         "✅ Monitoring..."
     )
 
     while True:
         try:
-            closes   = await fetch_closes(100)
-            price    = closes[-1]
-            ema_fast, ema_slow, rsi = calc_indicators(closes)
-            ts       = datetime.now().strftime("%H:%M:%S")
+            closes = await fetch_closes(100)
+            price  = closes[-1]
+            upper, middle, lower, rsi, buy_signal, close_signal = calc_indicators(closes)
+            ts     = datetime.now().strftime("%H:%M:%S")
 
-            uptrend  = ema_fast > ema_slow
-            trend_txt = "📈 Uptrend" if uptrend else "📉 Downtrend"
+            logger.info(f"{ts} ETH=${price:.2f} BB=[{lower}/{middle}/{upper}] RSI={rsi} Buy={buy_signal} Close={close_signal}")
 
-            logger.info(f"{ts} ETH=${price:.2f} EMA{EMA_FAST}={ema_fast} EMA{EMA_SLOW}={ema_slow} RSI={rsi} {trend_txt} pos={in_position}")
-
-            # ── BUY: Uptrend + Oversold ───────────────────────
-            if uptrend and rsi < RSI_BUY and not in_position:
+            # ── BUY: Lower Band + RSI < 45 ────────────────────
+            if buy_signal and not in_position:
                 margin = stats["current_margin"]
                 size   = calc_size(margin, price)
 
                 await send_tg(
                     f"🟢 *BUY SIGNAL!*\n"
                     f"━━━━━━━━━━━━━━━\n"
-                    f"📈 EMA{EMA_FAST}: `{ema_fast}` > EMA{EMA_SLOW}: `{ema_slow}` ✅\n"
-                    f"📉 RSI: `{rsi}` _(Below {RSI_BUY})_ ✅\n"
-                    f"💰 ETH: `${price:,.2f}`\n"
-                    f"💵 Margin: `${margin}` × `{LEVERAGE}x`\n"
+                    f"📉 Price: `${price:,.2f}` ≤ Lower Band: `${lower}`\n"
+                    f"📊 RSI: `{rsi}` _(Below {RSI_BUY})_\n"
+                    f"💵 Margin: `${margin}` × `{LEVERAGE}x` = `${margin*LEVERAGE:.2f}`\n"
                     f"📦 Size: `{size} ETH`\n"
                     f"_Executing BUY..._"
                 )
@@ -192,16 +197,12 @@ async def strategy_loop():
                     in_position = False
                     await send_tg(f"❌ BUY Failed: `{str(e)}`")
 
-            # ── NO TRADE: Downtrend warning ───────────────────
-            elif not uptrend and not in_position:
-                logger.info(f"Downtrend — No trade. EMA{EMA_FAST}({ema_fast}) < EMA{EMA_SLOW}({ema_slow})")
-
-            # ── CLOSE: RSI > 65 ───────────────────────────────
-            elif rsi > RSI_CLOSE and in_position:
+            # ── CLOSE: Upper Band ─────────────────────────────
+            elif close_signal and in_position:
                 await send_tg(
                     f"🔴 *CLOSE SIGNAL!*\n"
-                    f"RSI: `{rsi}` _(Above {RSI_CLOSE})_\n"
-                    f"ETH: `${price:,.2f}`\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"📈 Price: `${price:,.2f}` ≥ Upper Band: `${upper}`\n"
                     f"_Closing position..._"
                 )
                 try:
@@ -228,12 +229,12 @@ async def strategy_loop():
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 *Lighter DEX EMA+RSI Bot*\n"
+        "🤖 *Lighter DEX Bollinger+RSI Bot*\n"
         "━━━━━━━━━━━━━━━\n"
-        f"📈 EMA{EMA_FAST} > EMA{EMA_SLOW} + RSI < {RSI_BUY} → 🟢 BUY\n"
-        f"RSI > {RSI_CLOSE} → 🔴 CLOSE\n"
+        f"🟢 Lower Band + RSI < {RSI_BUY} → BUY\n"
+        f"🔴 Upper Band → CLOSE\n"
         f"⚡ {LEVERAGE}x | 💵 `${stats['current_margin']}`\n"
-        "/status /rsi /stats /history /balance",
+        "/status /bb /stats /history /balance",
         parse_mode="Markdown"
     )
 
@@ -241,48 +242,43 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         closes = await fetch_closes(100)
         price  = closes[-1]
-        ema_fast, ema_slow, rsi = calc_indicators(closes)
-        uptrend = ema_fast > ema_slow
-        trend = "📈 Uptrend" if uptrend else "📉 Downtrend"
+        upper, middle, lower, rsi, buy_signal, close_signal = calc_indicators(closes)
         pos = "🟢 LONG Open" if in_position else "⚪ Waiting"
     except:
-        price = ema_fast = ema_slow = rsi = 0
-        trend = pos = "N/A"
+        price = upper = middle = lower = rsi = 0
+        pos = "N/A"
     await update.message.reply_text(
         f"📊 *Status*\n"
         f"━━━━━━━━━━━━━━━\n"
         f"📍 Position: {pos}\n"
         f"💰 ETH: `${price:,.2f}`\n"
-        f"📈 EMA{EMA_FAST}: `{ema_fast}` | EMA{EMA_SLOW}: `{ema_slow}`\n"
-        f"📊 RSI: `{rsi}` | {trend}\n"
-        f"💵 Margin: `${stats['current_margin']}`\n"
-        f"⏭ Next position: `${stats['current_margin'] * LEVERAGE:.2f}`",
+        f"📈 Upper: `${upper}` | Mid: `${middle}` | Lower: `${lower}`\n"
+        f"📊 RSI: `{rsi}`\n"
+        f"💵 Margin: `${stats['current_margin']}`",
         parse_mode="Markdown"
     )
 
-async def cmd_rsi(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def cmd_bb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         closes = await fetch_closes(100)
         price  = closes[-1]
-        ema_fast, ema_slow, rsi = calc_indicators(closes)
-        uptrend = ema_fast > ema_slow
-        trend   = "📈 Uptrend" if uptrend else "📉 Downtrend"
-        if uptrend and rsi < RSI_BUY:
+        upper, middle, lower, rsi, buy_signal, close_signal = calc_indicators(closes)
+        if buy_signal:
             zone = "🟢 BUY Zone!"
-        elif rsi > RSI_CLOSE:
+        elif close_signal:
             zone = "🔴 CLOSE Zone!"
-        elif not uptrend:
-            zone = "📉 Downtrend — No trade"
+        elif price < middle:
+            zone = "🔵 Below Middle — Watch Lower Band"
         else:
-            zone = "🟡 Waiting..."
+            zone = "🟡 Above Middle — Watch Upper Band"
         await update.message.reply_text(
-            f"📊 *Live Indicators*\n"
+            f"📊 *Bollinger Bands*\n"
             f"━━━━━━━━━━━━━━━\n"
             f"💰 ETH: `${price:,.2f}`\n"
-            f"📈 EMA{EMA_FAST}: `{ema_fast}`\n"
-            f"📈 EMA{EMA_SLOW}: `{ema_slow}`\n"
+            f"📈 Upper: `${upper}`\n"
+            f"➖ Middle: `${middle}`\n"
+            f"📉 Lower: `${lower}`\n"
             f"📊 RSI: `{rsi}`\n"
-            f"{trend}\n"
             f"📍 {zone}",
             parse_mode="Markdown"
         )
@@ -328,7 +324,7 @@ async def main():
     bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     for cmd, handler in [
         ("start", cmd_start), ("status", cmd_status),
-        ("rsi", cmd_rsi), ("stats", cmd_stats),
+        ("bb", cmd_bb), ("stats", cmd_stats),
         ("history", cmd_history), ("balance", cmd_balance)
     ]:
         bot_app.add_handler(CommandHandler(cmd, handler))
