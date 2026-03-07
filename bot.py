@@ -1,26 +1,28 @@
 import os, asyncio, logging, json
 from datetime import datetime
-import httpx
 import pandas as pd
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+import lighter
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
-LIGHTER_API_KEY    = os.environ.get("LIGHTER_API_KEY", "")
-LIGHTER_SECRET     = os.environ.get("LIGHTER_SECRET", "")
+# ─── Environment Variables ────────────────────────────────────
+TELEGRAM_BOT_TOKEN  = os.environ["TELEGRAM_BOT_TOKEN"]
+TELEGRAM_CHAT_ID    = os.environ["TELEGRAM_CHAT_ID"]
+ACCOUNT_INDEX       = int(os.environ["ACCOUNT_INDEX"])
+API_KEY_INDEX       = int(os.environ["API_KEY_INDEX"])
+LIGHTER_PRIVATE_KEY = os.environ["LIGHTER_PRIVATE_KEY"]
 
+# ─── Config ───────────────────────────────────────────────────
+BASE_URL       = "https://mainnet.zklighter.elliot.ai"
 LEVERAGE       = 6
 BB_PERIOD      = 20
 BB_STD         = 2
 RSI_PERIOD     = 14
 RSI_BUY        = 45
-CHECK_INTERVAL = 900
-
-LIGHTER_BASE = "https://api.lighter.xyz/v1"
+CHECK_INTERVAL = 900  # 15 minutes
 
 MARKETS = {
     "ETH": {
@@ -28,6 +30,7 @@ MARKETS = {
         "market_index": 0,
         "stats_file":   "eth_stats.json",
         "decimals":     2,
+        "size_decimals": 3,
         "start_margin": float(os.environ.get("ETH_MARGIN", "5")),
     },
     "HYPE": {
@@ -35,14 +38,17 @@ MARKETS = {
         "market_index": 3,
         "stats_file":   "hype_stats.json",
         "decimals":     4,
+        "size_decimals": 2,
         "start_margin": float(os.environ.get("HYPE_MARGIN", "1")),
     }
 }
 
-bot_app   = None
-positions = {"ETH": False, "HYPE": False}
-all_stats = {}
+bot_app      = None
+positions    = {"ETH": False, "HYPE": False}
+all_stats    = {}
+signer_client = None
 
+# ─── Stats ────────────────────────────────────────────────────
 def load_stats(token):
     f = MARKETS[token]["stats_file"]
     try:
@@ -69,13 +75,9 @@ def save_stats(token, s):
 for t in MARKETS:
     all_stats[t] = load_stats(t)
 
-def get_headers():
-    return {
-        "Authorization": f"Bearer {LIGHTER_API_KEY}",
-        "Content-Type":  "application/json"
-    }
-
+# ─── Indicators ───────────────────────────────────────────────
 async def fetch_closes(symbol, limit=100):
+    import httpx
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.get(
             "https://api.binance.com/api/v3/klines",
@@ -97,27 +99,30 @@ def calc_indicators(closes):
     price  = closes[-1]
     return upper, middle, lower, rsi, price <= lower and rsi < RSI_BUY, price >= upper
 
-async def lighter_order(token, side, size, reduce_only=False):
-    payload = {
-        "market_index":  MARKETS[token]["market_index"],
-        "base_amount":   int(size * 1e6),
-        "is_ask":        (side == "SELL"),
-        "order_type":    "MARKET",
-        "time_in_force": "IOC",
-        "reduce_only":   reduce_only,
-        "leverage":      LEVERAGE,
-    }
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.post(f"{LIGHTER_BASE}/orders", json=payload, headers=get_headers())
-        return r.json()
+# ─── Lighter SDK Order ────────────────────────────────────────
+async def place_order(token, side, size, price, reduce_only=False):
+    cfg          = MARKETS[token]
+    # price format: integer (e.g. $1980.50 → 198050)
+    price_int    = int(price * 100)
+    base_amount  = int(size * 1000)  # 0.001 ETH precision
 
-async def lighter_balance():
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.get(f"{LIGHTER_BASE}/account", headers=get_headers())
-        return r.json()
+    tx, tx_hash, err = await signer_client.create_order(
+        market_index      = cfg["market_index"],
+        client_order_index= int(datetime.now().timestamp()),
+        base_amount       = base_amount,
+        price             = price_int,
+        is_ask            = (side == "SELL"),
+        order_type        = signer_client.ORDER_TYPE_MARKET,
+        time_in_force     = signer_client.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL,
+        reduce_only       = reduce_only,
+        order_expiry      = signer_client.DEFAULT_IOC_EXPIRY,
+    )
+    if err:
+        raise Exception(f"Order error: {err}")
+    return tx_hash
 
 def calc_size(token, margin, price):
-    return round((margin * LEVERAGE) / price, MARKETS[token]["decimals"])
+    return round((margin * LEVERAGE) / price, MARKETS[token]["size_decimals"])
 
 def record_close(token, exit_price):
     s     = all_stats[token]
@@ -141,6 +146,7 @@ def record_close(token, exit_price):
     save_stats(token, s)
     return pnl, new_m, result
 
+# ─── Telegram ─────────────────────────────────────────────────
 async def send_tg(msg):
     if bot_app:
         try:
@@ -150,6 +156,7 @@ async def send_tg(msg):
         except Exception as e:
             logger.error(f"TG error: {e}")
 
+# ─── Strategy Loop ────────────────────────────────────────────
 async def token_loop(token):
     cfg  = MARKETS[token]
     icon = "🔷" if token == "ETH" else "🔶"
@@ -164,38 +171,48 @@ async def token_loop(token):
 
             logger.info(f"{token}=${price:.{dec}f} RSI={rsi} Buy={buy_signal} Close={close_signal} Margin=${s['current_margin']}")
 
+            # ── BUY ───────────────────────────────────────────
             if buy_signal and not positions[token]:
                 margin = s["current_margin"]
                 size   = calc_size(token, margin, price)
                 await send_tg(
                     f"{icon} *{token} BUY SIGNAL!*\n"
                     f"━━━━━━━━━━━━━━━\n"
-                    f"📉 Price: `${price:.{dec}f}` ≤ Lower: `${lower}`\n"
-                    f"📊 RSI: `{rsi}`\n"
+                    f"📉 Price:`${price:.{dec}f}` ≤ Lower:`${lower}`\n"
+                    f"📊 RSI:`{rsi}`\n"
                     f"💵 `${margin}` × `{LEVERAGE}x` = `${margin*LEVERAGE:.2f}`\n"
-                    f"📦 `{size} {token}`\n_Executing..._"
+                    f"📦 Size:`{size} {token}`\n_Executing..._"
                 )
                 try:
-                    await lighter_order(token, "BUY", size)
+                    tx_hash = await place_order(token, "BUY", size, price)
                     positions[token]  = True
                     s["entry_price"]  = price
                     s["entry_size"]   = size
                     s["entry_margin"] = margin
                     save_stats(token, s)
-                    await send_tg(f"✅ *{token} LONG Opened!*\nEntry: `${price:.{dec}f}`")
+                    await send_tg(
+                        f"✅ *{token} LONG Opened!*\n"
+                        f"Entry:`${price:.{dec}f}` | Size:`{size}`\n"
+                        f"TX:`{tx_hash[:16]}...`"
+                    )
                 except Exception as e:
                     positions[token] = False
                     await send_tg(f"❌ {token} BUY Failed: `{str(e)}`")
 
+            # ── CLOSE ─────────────────────────────────────────
             elif close_signal and positions[token]:
-                await send_tg(f"{icon} *{token} CLOSE!*\nPrice: `${price:.{dec}f}` ≥ Upper: `${upper}`")
+                await send_tg(
+                    f"{icon} *{token} CLOSE!*\n"
+                    f"Price:`${price:.{dec}f}` ≥ Upper:`${upper}`\n_Closing..._"
+                )
                 try:
-                    await lighter_order(token, "SELL", s["entry_size"], reduce_only=True)
+                    tx_hash = await place_order(token, "SELL", s["entry_size"], price, reduce_only=True)
                     positions[token] = False
                     pnl, new_m, outcome = record_close(token, price)
                     wr = round(s["wins"] / max(s["total_trades"], 1) * 100, 1)
                     await send_tg(
                         f"{outcome} *{token} #{s['total_trades']} Closed!*\n"
+                        f"━━━━━━━━━━━━━━━\n"
                         f"Entry:`${s['entry_price']:.{dec}f}` → Exit:`${price:.{dec}f}`\n"
                         f"💰 PnL:`${pnl:+.4f}` | Margin:`${new_m}`\n"
                         f"🏆 WR:`{wr}%` | Next:`${new_m}`×`{LEVERAGE}x` 🚀"
@@ -215,15 +232,17 @@ async def strategy_loop():
         f"🔷 ETH | 💵 `${MARKETS['ETH']['start_margin']}`\n"
         f"🔶 HYPE | 💵 `${MARKETS['HYPE']['start_margin']}`\n"
         f"⚡ {LEVERAGE}x | ⏱ 15min | BB+RSI\n"
-        "✅ Monitoring..."
+        f"🔑 Account: `{ACCOUNT_INDEX}` | Key: `{API_KEY_INDEX}`\n"
+        "✅ SDK Connected! Monitoring..."
     )
     await asyncio.gather(token_loop("ETH"), token_loop("HYPE"))
 
+# ─── Telegram Commands ────────────────────────────────────────
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 *Multi-Token Bot*\n"
-        f"🔷 ETH Margin: `${all_stats['ETH']['current_margin']}`\n"
-        f"🔶 HYPE Margin: `${all_stats['HYPE']['current_margin']}`\n"
+        f"🔷 ETH:`${all_stats['ETH']['current_margin']}`\n"
+        f"🔶 HYPE:`${all_stats['HYPE']['current_margin']}`\n"
         f"⚡ {LEVERAGE}x | BB+RSI\n"
         "/status /bb /stats /history /balance",
         parse_mode="Markdown"
@@ -298,24 +317,42 @@ async def cmd_history(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_balance(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        d = await lighter_balance()
+        api_client  = lighter.ApiClient(lighter.Configuration(host=BASE_URL))
+        account_api = lighter.AccountApi(api_client)
+        resp        = await account_api.account(account_index=ACCOUNT_INDEX)
+        await api_client.close()
+        col = resp.collateral if hasattr(resp, 'collateral') else "N/A"
         await update.message.reply_text(
-            f"💰 Collateral:`${float(d.get('collateral',0)):,.2f}`\n"
-            f"📊 Equity:`${float(d.get('equity',0)):,.2f}`",
+            f"💰 *Balance*\nCollateral:`${col}`",
             parse_mode="Markdown"
         )
     except Exception as e:
         await update.message.reply_text(f"❌ {e}")
 
+# ─── Main ─────────────────────────────────────────────────────
 async def main():
-    global bot_app
+    global bot_app, signer_client
+
+    # Init Lighter SDK
+    signer_client = lighter.SignerClient(
+        url              = BASE_URL,
+        api_private_keys = {API_KEY_INDEX: LIGHTER_PRIVATE_KEY},
+        account_index    = ACCOUNT_INDEX
+    )
+    logger.info("Lighter SDK initialized!")
+
+    # Init Telegram
     bot_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     for cmd, handler in [
-        ("start", cmd_start), ("status", cmd_status),
-        ("bb", cmd_bb), ("stats", cmd_stats),
-        ("history", cmd_history), ("balance", cmd_balance)
+        ("start",   cmd_start),
+        ("status",  cmd_status),
+        ("bb",      cmd_bb),
+        ("stats",   cmd_stats),
+        ("history", cmd_history),
+        ("balance", cmd_balance),
     ]:
         bot_app.add_handler(CommandHandler(cmd, handler))
+
     await bot_app.initialize()
     await bot_app.start()
     await bot_app.updater.start_polling(drop_pending_updates=True)
