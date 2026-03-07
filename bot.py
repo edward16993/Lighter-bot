@@ -249,16 +249,30 @@ async def main():
         account_index=ACCOUNT_INDEX
     )
 
-    tg_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    tg_app = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .updater(None)
+        .build()
+    )
     for cmd, fn in [("start",cmd_start),("status",cmd_status),("bb",cmd_bb),
                     ("stats",cmd_stats),("history",cmd_history),("balance",cmd_balance)]:
         tg_app.add_handler(CommandHandler(cmd, fn))
 
     await tg_app.initialize()
     await tg_app.start()
-    await tg_app.updater.start_polling(drop_pending_updates=True)
+    # Manual polling loop
+    offset = None
     asyncio.create_task(strategy_loop())
-    await asyncio.Event().wait()
+    while True:
+        try:
+            updates = await tg_app.bot.get_updates(offset=offset, timeout=10, allowed_updates=["message"])
+            for update in updates:
+                offset = update.update_id + 1
+                await tg_app.process_update(update)
+        except Exception as e:
+            logger.error(f"Polling error: {e}")
+        await asyncio.sleep(1)
 
 if __name__ == "__main__":
     asyncio.run(main())
