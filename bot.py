@@ -28,19 +28,22 @@ MARKETS = {
         "symbol": "ETHUSDT", "market_index": 0,
         "stats_file": "eth_stats.json", "decimals": 2,
         "min_size": 0.002,
+        "leverage": 6,
         "start_margin": float(os.environ.get("ETH_MARGIN", "5")),
     },
     "HYPE": {
         "symbol": "HYPEUSDT", "market_index": 24,
         "stats_file": "hype_stats.json", "decimals": 2,
         "min_size": 0.50,
+        "leverage": 6,
         "start_margin": float(os.environ.get("HYPE_MARGIN", "1")),
     },
     "LIT": {
         "symbol": "LITUSDT", "market_index": 120,
         "stats_file": "lit_stats.json", "decimals": 2,
         "min_size": 2.0,
-        "start_margin": float(os.environ.get("LIT_MARGIN", "1")),
+        "leverage": 3,
+        "start_margin": float(os.environ.get("LIT_MARGIN", "1.5")),
     }
 }
 
@@ -144,7 +147,8 @@ async def place_order(token, side, size, price, reduce_only=False):
     return tx_hash
 
 def calc_size(token, margin, price):
-    size = (margin * LEVERAGE) / price
+    lev = MARKETS[token].get("leverage", LEVERAGE)
+    size = (margin * lev) / price
     min_size = MARKETS[token]["min_size"]
     size = max(size, min_size)
     return round(size, MARKETS[token]["decimals"])
@@ -380,4 +384,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
+                
