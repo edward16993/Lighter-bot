@@ -304,12 +304,21 @@ async def cmd_history(u: Update, c: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_balance(u: Update, c: ContextTypes.DEFAULT_TYPE):
     try:
-        api = lighter.ApiClient(lighter.Configuration(host=BASE_URL))
-        acc = lighter.AccountApi(api)
-        r   = await acc.account(str(ACCOUNT_INDEX))
-        await api.close()
-        await u.message.reply_text(f"💰 Collateral:`{r.collateral}`", parse_mode="Markdown")
-    except Exception as e: await u.message.reply_text(f"❌ {e}")
+        async with httpx.AsyncClient(timeout=15) as c2:
+            r = await c2.get(
+                f"{BASE_URL}/api/v1/account",
+                params={"account_index": ACCOUNT_INDEX}
+            )
+            data = r.json()
+            collateral = data.get("account", {}).get("collateral", "N/A")
+            unrealized = data.get("account", {}).get("total_unrealized_pnl", "0")
+            await u.message.reply_text(
+                f"💰 *Balance*\n"
+                f"Collateral: `${collateral}`\n"
+                f"Unrealized PnL: `${unrealized}`",
+                parse_mode="Markdown")
+    except Exception as e:
+        await u.message.reply_text(f"❌ {e}")
 
 async def main():
     global tg_app, signer_client
@@ -347,4 +356,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-        
+    
