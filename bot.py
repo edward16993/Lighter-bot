@@ -64,13 +64,28 @@ for t in MARKETS:
     all_stats[t] = load_stats(t)
 
 async def fetch_closes(symbol, limit=100):
+    # ETH → Binance, HYPE → OKX
     async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.get("https://api.binance.com/api/v3/klines",
-                        params={"symbol": symbol, "interval": "15m", "limit": limit})
-        data = r.json()
-        if not isinstance(data, list) or len(data) == 0:
-            raise Exception(f"No data for {symbol}: {data}")
-        return [float(x[4]) for x in data]
+        if symbol == "HYPEUSDT":
+            # OKX API for HYPE
+            r = await c.get(
+                "https://www.okx.com/api/v5/market/candles",
+                params={"instId": "HYPE-USDT", "bar": "15m", "limit": str(limit)}
+            )
+            data = r.json()
+            if data.get("code") != "0" or not data.get("data"):
+                raise Exception(f"OKX error for HYPE: {data}")
+            # OKX returns newest first, reverse it
+            return [float(x[4]) for x in reversed(data["data"])]
+        else:
+            r = await c.get(
+                "https://api.binance.com/api/v3/klines",
+                params={"symbol": symbol, "interval": "15m", "limit": limit}
+            )
+            data = r.json()
+            if not isinstance(data, list) or len(data) == 0:
+                raise Exception(f"No data for {symbol}: {data}")
+            return [float(x[4]) for x in data]
 
 def calc_indicators(closes):
     s   = pd.Series(closes)
