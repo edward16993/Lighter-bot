@@ -27,18 +27,18 @@ MARKETS = {
     "ETH": {
         "symbol": "ETHUSDT", "market_index": 0,
         "stats_file": "eth_stats.json", "decimals": 2,
+        "min_size": 0.002,
         "start_margin": float(os.environ.get("ETH_MARGIN", "5")),
     },
     "HYPE": {
-        "symbol": "HYPEUSDT", "market_index": 3,
-        "stats_file": "hype_stats.json", "decimals": 4,
+        "symbol": "HYPEUSDT", "market_index": 24,
+        "stats_file": "hype_stats.json", "decimals": 2,
+        "min_size": 0.50,
         "start_margin": float(os.environ.get("HYPE_MARGIN", "1")),
     }
 }
 
-# Binance symbol override from env
-MARKETS["ETH"]["symbol"]  = os.environ.get("ETH_SYMBOL",  "ETHUSDT")
-MARKETS["HYPE"]["symbol"] = os.environ.get("HYPE_SYMBOL", "HYPEUSDT")
+# ETH uses Binance, HYPE uses OKX (no symbol override needed)
 
 positions     = {"ETH": False, "HYPE": False}
 all_stats     = {}
@@ -130,8 +130,7 @@ async def place_order(token, side, size, price, reduce_only=False):
 
 def calc_size(token, margin, price):
     size = (margin * LEVERAGE) / price
-    # Lighter minimum sizes
-    min_size = 0.02 if token == "ETH" else 0.1
+    min_size = MARKETS[token]["min_size"]
     size = max(size, min_size)
     return round(size, MARKETS[token]["decimals"])
 
@@ -348,4 +347,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-            
+        
