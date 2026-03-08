@@ -35,6 +35,12 @@ MARKETS = {
         "stats_file": "hype_stats.json", "decimals": 2,
         "min_size": 0.50,
         "start_margin": float(os.environ.get("HYPE_MARGIN", "1")),
+    },
+    "LIT": {
+        "symbol": "LITUSDT", "market_index": 120,
+        "stats_file": "lit_stats.json", "decimals": 2,
+        "min_size": 2.0,
+        "start_margin": float(os.environ.get("LIT_MARGIN", "1")),
     }
 }
 
@@ -236,13 +242,15 @@ async def strategy_loop():
     eth_pos  = "🟢 LONG" if positions["ETH"]  else "⚪ None"
     hype_pos = "🟢 LONG" if positions["HYPE"] else "⚪ None"
 
+    lit_pos = "🟢 LONG" if positions.get("LIT") else "⚪ None"
     await send_tg(
         "🤖 *Bot Started!*\n"
         f"🔷 ETH `${MARKETS['ETH']['start_margin']}` | {eth_pos}\n"
         f"🔶 HYPE `${MARKETS['HYPE']['start_margin']}` | {hype_pos}\n"
+        f"🟣 LIT `${MARKETS['LIT']['start_margin']}` | {lit_pos}\n"
         f"⚡ {LEVERAGE}x | BB+RSI | 15min ✅"
     )
-    await asyncio.gather(token_loop("ETH"), token_loop("HYPE"))
+    await asyncio.gather(token_loop("ETH"), token_loop("HYPE"), token_loop("LIT"))
 
 async def cmd_start(u: Update, c: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_text(
