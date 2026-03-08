@@ -105,7 +105,7 @@ async def place_order(token, side, size, price, reduce_only=False):
     tx, tx_hash, err = await signer_client.create_order(
         market_index=MARKETS[token]["market_index"],
         client_order_index=int(datetime.now().timestamp()),
-        base_amount=int(size * 1000000),
+        base_amount=int(size * 10000),  # Lighter: 10000 = 1 ETH
         price=int(price * 100),
         is_ask=(side == "SELL"),
         order_type=signer_client.ORDER_TYPE_MARKET,
@@ -303,4 +303,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-            
+                   
