@@ -105,7 +105,7 @@ async def place_order(token, side, size, price, reduce_only=False):
     tx, tx_hash, err = await signer_client.create_order(
         market_index=MARKETS[token]["market_index"],
         client_order_index=int(datetime.now().timestamp()),
-        base_amount=int(size * 1000),   # Lighter: 1000 = 1 ETH
+        base_amount=int(size * 10000),  # Lighter: 10000 = 1 ETH
         price=int(price * 100),
         is_ask=(side == "SELL"),
         order_type=signer_client.ORDER_TYPE_MARKET,
@@ -117,7 +117,11 @@ async def place_order(token, side, size, price, reduce_only=False):
     return tx_hash
 
 def calc_size(token, margin, price):
-    return round((margin * LEVERAGE) / price, MARKETS[token]["decimals"])
+    size = (margin * LEVERAGE) / price
+    # Lighter minimum sizes
+    min_size = 0.02 if token == "ETH" else 0.1
+    size = max(size, min_size)
+    return round(size, MARKETS[token]["decimals"])
 
 def record_close(token, exit_price):
     s     = all_stats[token]
@@ -303,4 +307,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
+            
