@@ -286,16 +286,23 @@ async def cmd_status(u: Update, c: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_bb(u: Update, c: ContextTypes.DEFAULT_TYPE):
     try:
-        ec = await fetch_closes("ETHUSDT"); hc = await fetch_closes("HYPEUSDT")
-        eu,em,el,er,eb,ec2 = calc_indicators(ec)
-        hu,hm,hl,hr,hb,hc2 = calc_indicators(hc)
-        ez = "🟢 BUY!" if eb else ("🔴 CLOSE!" if ec2 else "🟡 Wait")
-        hz = "🟢 BUY!" if hb else ("🔴 CLOSE!" if hc2 else "🟡 Wait")
-        await u.message.reply_text(
-            f"🔷 ETH RSI:`{er}` {ez}\nU:`${eu}` M:`${em}` L:`${el}`\n"
-            f"🔶 HYPE RSI:`{hr}` {hz}\nU:`${hu}` M:`${hm}` L:`${hl}`",
-            parse_mode="Markdown")
-    except Exception as e: await u.message.reply_text(f"❌ {e}")
+        lines = []
+        emojis = {"ETH": "🔷", "HYPE": "🔶", "LIT": "🟣"}
+        for token in MARKETS:
+            symbol = MARKETS[token]["symbol"]
+            closes = await fetch_closes(symbol)
+            upper, mid, lower, rsi, buy_sig, close_sig = calc_indicators(closes)
+            status = "🟢 BUY!" if buy_sig else ("🔴 CLOSE!" if close_sig else "🟡 Wait")
+            emoji = emojis.get(token, "🔸")
+            price = closes[-1]
+            lines.append(
+                f"{emoji} *{token}* RSI:`{rsi}` {status}\n"
+                f"U:`${upper:.4f}` M:`${mid:.4f}` L:`${lower:.4f}`"
+            )
+        await u.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    except Exception as e:
+        await u.message.reply_text(f"❌ {e}")
+
 
 async def cmd_stats(u: Update, c: ContextTypes.DEFAULT_TYPE):
     msg = ""
@@ -373,4 +380,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-                
+    
