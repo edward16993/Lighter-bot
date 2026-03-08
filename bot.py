@@ -208,10 +208,39 @@ async def token_loop(token):
             logger.error(f"{token}: {e}")
         await asyncio.sleep(CHECK_INTERVAL)
 
+async def check_open_positions():
+    """Check Lighter DEX for open positions on startup"""
+    try:
+        api = lighter.ApiClient(lighter.Configuration(host=BASE_URL))
+        acc = lighter.AccountApi(api)
+        r   = await acc.account(str(ACCOUNT_INDEX))
+        await api.close()
+
+        open_positions = getattr(r, 'positions', []) or []
+        for pos in open_positions:
+            market_idx = getattr(pos, 'market_index', -1)
+            size       = float(getattr(pos, 'base_amount', 0) or 0)
+            if size > 0:
+                if market_idx == MARKETS["ETH"]["market_index"]:
+                    positions["ETH"] = True
+                    logger.info("ETH position found on startup!")
+                elif market_idx == MARKETS["HYPE"]["market_index"]:
+                    positions["HYPE"] = True
+                    logger.info("HYPE position found on startup!")
+    except Exception as e:
+        logger.error(f"Position check error: {e}")
+
 async def strategy_loop():
+    # Check existing positions before starting
+    await check_open_positions()
+
+    eth_pos  = "🟢 LONG" if positions["ETH"]  else "⚪ None"
+    hype_pos = "🟢 LONG" if positions["HYPE"] else "⚪ None"
+
     await send_tg(
         "🤖 *Bot Started!*\n"
-        f"🔷 ETH `${MARKETS['ETH']['start_margin']}` | 🔶 HYPE `${MARKETS['HYPE']['start_margin']}`\n"
+        f"🔷 ETH `${MARKETS['ETH']['start_margin']}` | {eth_pos}\n"
+        f"🔶 HYPE `${MARKETS['HYPE']['start_margin']}` | {hype_pos}\n"
         f"⚡ {LEVERAGE}x | BB+RSI | 15min ✅"
     )
     await asyncio.gather(token_loop("ETH"), token_loop("HYPE"))
@@ -319,4 +348,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
+            
