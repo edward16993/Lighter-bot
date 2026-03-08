@@ -102,11 +102,23 @@ def calc_indicators(closes):
     return upper, middle, lower, rsi, p <= lower and rsi < RSI_BUY, p >= upper
 
 async def place_order(token, side, size, price, reduce_only=False):
+    # Lighter precision: 1 ETH = 10 base units (from filled orders: 0.002 ETH = 20)
+    # Wait - filled was 0.0020 with amount=20, so 1 ETH = 10000
+    # But 0.0200 = 200 cancelled... price issue!
+    # For market orders: use slippage price (BUY=high, SELL=low)
+    if side == "BUY":
+        order_price = int(price * 1.05 * 100)  # 5% slippage tolerance
+    else:
+        order_price = int(price * 0.95 * 100)  # 5% slippage tolerance
+
+    base_amt = int(size * 10000)
+    logger.info(f"Order: {side} {size} {token} base_amount={base_amt} price={order_price}")
+
     tx, tx_hash, err = await signer_client.create_order(
         market_index=MARKETS[token]["market_index"],
         client_order_index=int(datetime.now().timestamp()),
-        base_amount=int(size * 10000),  # Lighter: 10000 = 1 ETH
-        price=int(price * 100),
+        base_amount=base_amt,
+        price=order_price,
         is_ask=(side == "SELL"),
         order_type=signer_client.ORDER_TYPE_MARKET,
         time_in_force=signer_client.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL,
@@ -307,4 +319,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-            
+    
