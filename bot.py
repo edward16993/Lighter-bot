@@ -70,7 +70,6 @@ for t in MARKETS:
     all_stats[t] = load_stats(t)
 
 async def fetch_closes(symbol, limit=100):
-    # ETH → Binance, HYPE → OKX
     async with httpx.AsyncClient(timeout=15) as c:
         if symbol == "HYPEUSDT":
             # OKX API for HYPE
@@ -81,9 +80,19 @@ async def fetch_closes(symbol, limit=100):
             data = r.json()
             if data.get("code") != "0" or not data.get("data"):
                 raise Exception(f"OKX error for HYPE: {data}")
-            # OKX returns newest first, reverse it
+            return [float(x[4]) for x in reversed(data["data"])]
+        elif symbol == "LITUSDT":
+            # OKX API for LIT
+            r = await c.get(
+                "https://www.okx.com/api/v5/market/candles",
+                params={"instId": "LIT-USDT", "bar": "15m", "limit": str(limit)}
+            )
+            data = r.json()
+            if data.get("code") != "0" or not data.get("data"):
+                raise Exception(f"OKX error for LIT: {data}")
             return [float(x[4]) for x in reversed(data["data"])]
         else:
+            # Binance for ETH and others
             r = await c.get(
                 "https://api.binance.com/api/v3/klines",
                 params={"symbol": symbol, "interval": "15m", "limit": limit}
@@ -364,4 +373,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
+                
