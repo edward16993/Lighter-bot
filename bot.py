@@ -16,7 +16,7 @@ API_KEY_INDEX       = int(os.environ["API_KEY_INDEX"])
 LIGHTER_PRIVATE_KEY = os.environ["LIGHTER_PRIVATE_KEY"]
 
 BASE_URL       = "https://mainnet.zklighter.elliot.ai"
-LEVERAGE       = 6
+LEVERAGE       = 5
 BB_PERIOD      = 20
 BB_STD         = 2
 RSI_PERIOD     = 14
@@ -28,14 +28,14 @@ MARKETS = {
         "symbol": "ETHUSDT", "market_index": 0,
         "stats_file": "eth_stats.json", "decimals": 2,
         "min_size": 0.002,
-        "leverage": 6,
+        "leverage": 5,
         "start_margin": float(os.environ.get("ETH_MARGIN", "5")),
     },
     "HYPE": {
         "symbol": "HYPEUSDT", "market_index": 24,
         "stats_file": "hype_stats.json", "decimals": 2,
         "min_size": 0.50,
-        "leverage": 6,
+        "leverage": 5,
         "start_margin": float(os.environ.get("HYPE_MARGIN", "1")),
     },
     "LIT": {
@@ -49,7 +49,7 @@ MARKETS = {
         "symbol": "SOLUSDT", "market_index": 2,
         "stats_file": "sol_stats.json", "decimals": 3,
         "min_size": 0.05,
-        "leverage": 6,
+        "leverage": 5,
         "start_margin": float(os.environ.get("SOL_MARGIN", "1")),
     }
 }
