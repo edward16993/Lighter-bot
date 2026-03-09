@@ -17,130 +17,75 @@ LIGHTER_PRIVATE_KEY = os.environ["LIGHTER_PRIVATE_KEY"]
 
 BASE_URL       = "https://mainnet.zklighter.elliot.ai"
 LEVERAGE       = 5
-BB_PERIOD      = 20
-BB_STD         = 2
 RSI_PERIOD     = 14
-RSI_BUY        = 40
-CHECK_INTERVAL = 900
+RSI_BUY        = 70       # RSI > 70 → BUY
+RSI_CLOSE      = 40       # RSI < 40 → CLOSE
+STOP_LOSS_PCT  = 0.03     # 3% stop loss
+CHECK_INTERVAL = 900      # 15 min
 
-MARKETS = {
-    "ETH": {
-        "symbol": "ETHUSDT", "market_index": 0,
-        "stats_file": "eth_stats.json", "decimals": 2,
-        "min_size": 0.002,
-        "leverage": 5,
-        "start_margin": float(os.environ.get("ETH_MARGIN", "5")),
-    },
-    "HYPE": {
-        "symbol": "HYPEUSDT", "market_index": 24,
-        "stats_file": "hype_stats.json", "decimals": 2,
-        "min_size": 0.50,
-        "leverage": 5,
-        "start_margin": float(os.environ.get("HYPE_MARGIN", "1")),
-    },
-    "LIT": {
-        "symbol": "LITUSDT", "market_index": 120,
-        "stats_file": "lit_stats.json", "decimals": 2,
-        "min_size": 2.0,
-        "leverage": 3,
-        "start_margin": float(os.environ.get("LIT_MARGIN", "1.5")),
-    },
-    "SOL": {
-        "symbol": "SOLUSDT", "market_index": 2,
-        "stats_file": "sol_stats.json", "decimals": 3,
-        "min_size": 0.05,
-        "leverage": 5,
-        "start_margin": float(os.environ.get("SOL_MARGIN", "1")),
-    }
+ETH_MARKET = {
+    "symbol":       "ETHUSDT",
+    "market_index": 0,
+    "stats_file":   "eth_stats.json",
+    "decimals":     2,
+    "min_size":     0.002,
+    "leverage":     5,
+    "start_margin": float(os.environ.get("ETH_MARGIN", "8")),
 }
 
-# ETH uses Binance, HYPE uses OKX (no symbol override needed)
-
-positions     = {"ETH": False, "HYPE": False, "LIT": False, "SOL": False}
-all_stats     = {}
+position      = False
+entry_price   = 0.0
+entry_size    = 0.0
+entry_margin  = 0.0
+sl_price      = 0.0
+stats         = {}
 signer_client = None
 tg_app        = None
 
-def load_stats(token):
+def load_stats():
     try:
-        if os.path.exists(MARKETS[token]["stats_file"]):
-            with open(MARKETS[token]["stats_file"]) as f:
+        if os.path.exists(ETH_MARKET["stats_file"]):
+            with open(ETH_MARKET["stats_file"]) as f:
                 return json.load(f)
     except: pass
-    s = MARKETS[token]["start_margin"]
-    return {"current_margin": s, "total_trades": 0, "wins": 0, "losses": 0,
-            "total_pnl": 0.0, "peak_margin": s, "entry_price": 0.0,
+    m = ETH_MARKET["start_margin"]
+    return {"current_margin": m, "total_trades": 0, "wins": 0, "losses": 0,
+            "total_pnl": 0.0, "peak_margin": m, "entry_price": 0.0,
             "entry_size": 0.0, "entry_margin": 0.0, "history": []}
 
-def save_stats(token):
-    with open(MARKETS[token]["stats_file"], "w") as f:
-        json.dump(all_stats[token], f, indent=2)
+def save_stats():
+    with open(ETH_MARKET["stats_file"], "w") as f:
+        json.dump(stats, f, indent=2)
 
-for t in MARKETS:
-    all_stats[t] = load_stats(t)
-
-async def fetch_closes(symbol, limit=100):
+async def fetch_closes(limit=100):
     async with httpx.AsyncClient(timeout=15) as c:
-        if symbol == "HYPEUSDT":
-            # OKX API for HYPE
-            r = await c.get(
-                "https://www.okx.com/api/v5/market/candles",
-                params={"instId": "HYPE-USDT", "bar": "15m", "limit": str(limit)}
-            )
-            data = r.json()
-            if data.get("code") != "0" or not data.get("data"):
-                raise Exception(f"OKX error for HYPE: {data}")
-            return [float(x[4]) for x in reversed(data["data"])]
-        elif symbol == "LITUSDT":
-            # OKX API for LIT
-            r = await c.get(
-                "https://www.okx.com/api/v5/market/candles",
-                params={"instId": "LIT-USDT", "bar": "15m", "limit": str(limit)}
-            )
-            data = r.json()
-            if data.get("code") != "0" or not data.get("data"):
-                raise Exception(f"OKX error for LIT: {data}")
-            return [float(x[4]) for x in reversed(data["data"])]
-        else:
-            # Binance for ETH and others
-            r = await c.get(
-                "https://api.binance.com/api/v3/klines",
-                params={"symbol": symbol, "interval": "15m", "limit": limit}
-            )
-            data = r.json()
-            if not isinstance(data, list) or len(data) == 0:
-                raise Exception(f"No data for {symbol}: {data}")
-            return [float(x[4]) for x in data]
+        # OKX for ETH (India-friendly)
+        r = await c.get(
+            "https://www.okx.com/api/v5/market/candles",
+            params={"instId": "ETH-USDT-SWAP", "bar": "15m", "limit": str(limit)}
+        )
+        data = r.json()
+        if data.get("code") != "0" or not data.get("data"):
+            raise Exception(f"OKX ETH error: {data}")
+        return [float(x[4]) for x in reversed(data["data"])]
 
-def calc_indicators(closes):
-    s   = pd.Series(closes)
-    sma = s.rolling(BB_PERIOD).mean()
-    std = s.rolling(BB_PERIOD).std()
-    upper  = round(float((sma + BB_STD * std).iloc[-1]), 4)
-    middle = round(float(sma.iloc[-1]), 4)
-    lower  = round(float((sma - BB_STD * std).iloc[-1]), 4)
-    d    = s.diff()
-    gain = d.where(d > 0, 0.0).ewm(com=RSI_PERIOD-1, adjust=False).mean()
-    loss = (-d.where(d < 0, 0.0)).ewm(com=RSI_PERIOD-1, adjust=False).mean()
-    rsi  = round(float((100 - (100 / (1 + gain / loss))).iloc[-1]), 2)
-    p    = closes[-1]
-    return upper, middle, lower, rsi, p <= lower and rsi < RSI_BUY, p >= upper
+def calc_rsi(closes):
+    s     = pd.Series(closes)
+    delta = s.diff()
+    gain  = delta.where(delta > 0, 0).ewm(com=RSI_PERIOD-1, adjust=False).mean()
+    loss  = (-delta.where(delta < 0, 0)).ewm(com=RSI_PERIOD-1, adjust=False).mean()
+    rsi   = round(float((100 - (100 / (1 + gain / loss))).iloc[-1]), 2)
+    return rsi
 
-async def place_order(token, side, size, price, reduce_only=False):
-    # Lighter precision: 1 ETH = 10 base units (from filled orders: 0.002 ETH = 20)
-    # Wait - filled was 0.0020 with amount=20, so 1 ETH = 10000
-    # But 0.0200 = 200 cancelled... price issue!
-    # For market orders: use slippage price (BUY=high, SELL=low)
+async def place_order(side, size, price, reduce_only=False):
     if side == "BUY":
-        order_price = int(price * 1.05 * 100)  # 5% slippage tolerance
+        order_price = int(price * 1.05 * 100)
     else:
-        order_price = int(price * 0.95 * 100)  # 5% slippage tolerance
-
+        order_price = int(price * 0.95 * 100)
     base_amt = int(size * 10000)
-    logger.info(f"Order: {side} {size} {token} base_amount={base_amt} price={order_price}")
-
+    logger.info(f"Order: {side} {size} ETH base={base_amt} price={order_price}")
     tx, tx_hash, err = await signer_client.create_order(
-        market_index=MARKETS[token]["market_index"],
+        market_index=ETH_MARKET["market_index"],
         client_order_index=int(datetime.now().timestamp()),
         base_amount=base_amt,
         price=order_price,
@@ -153,29 +98,30 @@ async def place_order(token, side, size, price, reduce_only=False):
     if err: raise Exception(str(err))
     return tx_hash
 
-def calc_size(token, margin, price):
-    lev = MARKETS[token].get("leverage", LEVERAGE)
-    size = (margin * lev) / price
-    min_size = MARKETS[token]["min_size"]
-    size = max(size, min_size)
-    return round(size, MARKETS[token]["decimals"])
+def calc_size(margin, price):
+    size = (margin * LEVERAGE) / price
+    size = max(size, ETH_MARKET["min_size"])
+    return round(size, ETH_MARKET["decimals"])
 
-def record_close(token, exit_price):
-    s     = all_stats[token]
-    pnl   = round((exit_price - s["entry_price"]) * s["entry_size"], 4)
-    new_m = round(max(s["entry_margin"] + pnl, 0.5), 4)
-    s["total_trades"] += 1; s["total_pnl"] += pnl
-    s["current_margin"] = new_m
-    if new_m > s["peak_margin"]: s["peak_margin"] = new_m
+def record_close(exit_price, reason):
+    global stats
+    pnl   = round((exit_price - stats["entry_price"]) * stats["entry_size"], 4)
+    new_m = round(max(stats["entry_margin"] + pnl, 0.5), 4)
+    stats["total_trades"] += 1
+    stats["total_pnl"]    += pnl
+    stats["current_margin"] = new_m
+    if new_m > stats["peak_margin"]: stats["peak_margin"] = new_m
     result = "✅ WIN" if pnl >= 0 else "❌ LOSS"
-    if pnl >= 0: s["wins"] += 1
-    else:        s["losses"] += 1
-    s["history"].append({"no": s["total_trades"], "entry": s["entry_price"],
-        "exit": exit_price, "pnl": pnl, "old_margin": s["entry_margin"],
-        "new_margin": new_m, "result": result,
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M")})
-    s["history"] = s["history"][-10:]
-    save_stats(token)
+    if pnl >= 0: stats["wins"] += 1
+    else:        stats["losses"] += 1
+    stats["history"].append({
+        "no": stats["total_trades"], "entry": stats["entry_price"],
+        "exit": exit_price, "pnl": pnl, "reason": reason,
+        "old_margin": stats["entry_margin"], "new_margin": new_m,
+        "result": result, "time": datetime.now().strftime("%Y-%m-%d %H:%M")
+    })
+    stats["history"] = stats["history"][-10:]
+    save_stats()
     return pnl, new_m, result
 
 async def send_tg(msg):
@@ -184,201 +130,238 @@ async def send_tg(msg):
     except Exception as e:
         logger.error(f"TG: {e}")
 
-async def token_loop(token):
-    icon = "🔷" if token == "ETH" else "🔶"
-    while True:
-        try:
-            closes = await fetch_closes(MARKETS[token]["symbol"])
-            price  = closes[-1]
-            upper, middle, lower, rsi, buy_sig, close_sig = calc_indicators(closes)
-            dec = MARKETS[token]["decimals"]
-            s   = all_stats[token]
-            logger.info(f"{token}=${price:.{dec}f} RSI={rsi} Buy={buy_sig} Close={close_sig}")
+async def strategy_loop():
+    global position, entry_price, entry_size, entry_margin, sl_price, stats
 
-            if buy_sig and not positions[token]:
-                margin = s["current_margin"]
-                size   = calc_size(token, margin, price)
-                await send_tg(
-                    f"{icon} *{token} BUY!*\n"
-                    f"Price:`${price:.{dec}f}` ≤ Lower:`${lower}`\n"
-                    f"RSI:`{rsi}` | `${margin}`×`{LEVERAGE}x`\n"
-                    f"Size:`{size} {token}` | _Executing..._"
-                )
-                try:
-                    tx = await place_order(token, "BUY", size, price)
-                    positions[token] = True
-                    s["entry_price"] = price; s["entry_size"] = size; s["entry_margin"] = margin
-                    save_stats(token)
-                    await send_tg(f"✅ *{token} LONG Opened!* Entry:`${price:.{dec}f}`")
-                except Exception as e:
-                    positions[token] = False
-                    await send_tg(f"❌ {token} BUY Failed: `{e}`")
-
-            elif close_sig and positions[token]:
-                await send_tg(f"{icon} *{token} CLOSE!* Price:`${price:.{dec}f}` ≥ Upper:`${upper}`")
-                try:
-                    await place_order(token, "SELL", s["entry_size"], price, reduce_only=True)
-                    positions[token] = False
-                    pnl, new_m, outcome = record_close(token, price)
-                    wr = round(s["wins"] / max(s["total_trades"], 1) * 100, 1)
-                    await send_tg(
-                        f"{outcome} *{token} #{s['total_trades']}*\n"
-                        f"PnL:`${pnl:+.4f}` | Margin:`${new_m}`\n"
-                        f"WR:`{wr}%` | Next:`${new_m}`×`{LEVERAGE}x` 🚀"
-                    )
-                except Exception as e:
-                    positions[token] = False
-                    await send_tg(f"❌ {token} CLOSE Failed: `{e}`")
-        except Exception as e:
-            logger.error(f"{token}: {e}")
-        await asyncio.sleep(CHECK_INTERVAL)
-
-async def check_open_positions():
-    """Check Lighter DEX for open positions on startup"""
+    # Check open positions on startup
     try:
         api = lighter.ApiClient(lighter.Configuration(host=BASE_URL))
         acc = lighter.AccountApi(api)
         r   = await acc.account(str(ACCOUNT_INDEX))
         await api.close()
-
         open_positions = getattr(r, 'positions', []) or []
         for pos in open_positions:
-            market_idx = getattr(pos, 'market_index', -1)
-            size       = float(getattr(pos, 'base_amount', 0) or 0)
-            if size > 0:
-                if market_idx == MARKETS["ETH"]["market_index"]:
-                    positions["ETH"] = True
+            if getattr(pos, 'market_index', -1) == ETH_MARKET["market_index"]:
+                size = float(getattr(pos, 'base_amount', 0) or 0)
+                if size > 0:
+                    position     = True
+                    entry_price  = float(stats.get("entry_price", 0))
+                    entry_size   = float(stats.get("entry_size", 0))
+                    entry_margin = float(stats.get("entry_margin", 0))
+                    sl_price     = entry_price * (1 - STOP_LOSS_PCT) if entry_price > 0 else 0
                     logger.info("ETH position found on startup!")
-                elif market_idx == MARKETS["HYPE"]["market_index"]:
-                    positions["HYPE"] = True
-                    logger.info("HYPE position found on startup!")
     except Exception as e:
         logger.error(f"Position check error: {e}")
 
-async def strategy_loop():
-    # Check existing positions before starting
-    await check_open_positions()
-
-    eth_pos  = "🟢 LONG" if positions["ETH"]  else "⚪ None"
-    hype_pos = "🟢 LONG" if positions["HYPE"] else "⚪ None"
-
-    lit_pos = "🟢 LONG" if positions.get("LIT") else "⚪ None"
-    sol_pos = "🟢 LONG" if positions.get("SOL") else "⚪ None"
+    eth_pos = "🟢 LONG" if position else "⚪ None"
     await send_tg(
-        "🤖 *Bot Started!*\n"
-        f"🔷 ETH `${MARKETS['ETH']['start_margin']}` | {eth_pos}\n"
-        f"🔶 HYPE `${MARKETS['HYPE']['start_margin']}` | {hype_pos}\n"
-        f"🟣 LIT `${MARKETS['LIT']['start_margin']}` | {lit_pos}\n"
-        f"🟤 SOL `${MARKETS['SOL']['start_margin']}` | {sol_pos}\n"
-        f"⚡ {LEVERAGE}x | BB+RSI | 15min ✅"
+        "🤖 *ETH Bot Started!*\n"
+        f"🔷 ETH `${stats['current_margin']}` | {eth_pos}\n"
+        f"⚡ {LEVERAGE}x | RSI>{RSI_BUY} BUY | RSI<{RSI_CLOSE} CLOSE | SL {int(STOP_LOSS_PCT*100)}%\n"
+        f"📊 15min | OKX data ✅"
     )
-    await asyncio.gather(token_loop("ETH"), token_loop("HYPE"), token_loop("LIT"), token_loop("SOL"))
 
+    while True:
+        try:
+            closes = await fetch_closes()
+            price  = closes[-1]
+            rsi    = calc_rsi(closes)
+            logger.info(f"ETH=${price:.2f} RSI={rsi} Position={position} SL={sl_price:.2f}")
+
+            # BUY signal: RSI > 70
+            if not position and rsi > RSI_BUY:
+                margin = stats["current_margin"]
+                size   = calc_size(margin, price)
+                await send_tg(
+                    f"🔷 *ETH BUY!*\n"
+                    f"RSI:`{rsi}` > `{RSI_BUY}` 📈\n"
+                    f"Price:`${price:.2f}` | Size:`{size} ETH`\n"
+                    f"Margin:`${margin}` × `{LEVERAGE}x`\n"
+                    f"SL:`${price*(1-STOP_LOSS_PCT):.2f}` (-{int(STOP_LOSS_PCT*100)}%)\n"
+                    f"_Executing..._"
+                )
+                try:
+                    tx = await place_order("BUY", size, price)
+                    position     = True
+                    entry_price  = price
+                    entry_size   = size
+                    entry_margin = margin
+                    sl_price     = price * (1 - STOP_LOSS_PCT)
+                    stats["entry_price"]  = price
+                    stats["entry_size"]   = size
+                    stats["entry_margin"] = margin
+                    save_stats()
+                    await send_tg(
+                        f"✅ *ETH LONG Opened!*\n"
+                        f"Entry:`${price:.2f}` | Size:`{size}`\n"
+                        f"SL:`${sl_price:.2f}`"
+                    )
+                except Exception as e:
+                    position = False
+                    await send_tg(f"❌ ETH BUY Failed: `{e}`")
+
+            # CLOSE: RSI < 40
+            elif position and rsi < RSI_CLOSE:
+                await send_tg(
+                    f"🔷 *ETH CLOSE!*\n"
+                    f"RSI:`{rsi}` < `{RSI_CLOSE}` 📉\n"
+                    f"Price:`${price:.2f}`"
+                )
+                try:
+                    await place_order("SELL", entry_size, price, reduce_only=True)
+                    position = False
+                    pnl, new_m, outcome = record_close(price, "RSI")
+                    wr = round(stats["wins"] / max(stats["total_trades"], 1) * 100, 1)
+                    await send_tg(
+                        f"{outcome} *ETH #{stats['total_trades']}*\n"
+                        f"Entry:`${entry_price:.2f}` → Exit:`${price:.2f}`\n"
+                        f"PnL:`${pnl:+.4f}` | WR:`{wr}%`\n"
+                        f"Margin:`${new_m}` × `{LEVERAGE}x` 🚀"
+                    )
+                except Exception as e:
+                    position = False
+                    await send_tg(f"❌ ETH CLOSE Failed: `{e}`")
+
+            # CLOSE: Stop Loss -3%
+            elif position and price <= sl_price:
+                await send_tg(
+                    f"🛑 *ETH STOP LOSS!*\n"
+                    f"Price:`${price:.2f}` ≤ SL:`${sl_price:.2f}`\n"
+                    f"Loss capped at -{int(STOP_LOSS_PCT*100)}%!"
+                )
+                try:
+                    await place_order("SELL", entry_size, price, reduce_only=True)
+                    position = False
+                    pnl, new_m, outcome = record_close(price, "SL")
+                    wr = round(stats["wins"] / max(stats["total_trades"], 1) * 100, 1)
+                    await send_tg(
+                        f"{outcome} *ETH SL #{stats['total_trades']}*\n"
+                        f"Entry:`${entry_price:.2f}` → Exit:`${price:.2f}`\n"
+                        f"PnL:`${pnl:+.4f}` | WR:`{wr}%`\n"
+                        f"Next Margin:`${new_m}` 🛡️"
+                    )
+                except Exception as e:
+                    position = False
+                    await send_tg(f"❌ ETH SL Failed: `{e}`")
+
+        except Exception as e:
+            logger.error(f"ETH loop: {e}")
+        await asyncio.sleep(CHECK_INTERVAL)
+
+# ═══════════════════════════════════════
+# TELEGRAM COMMANDS
+# ═══════════════════════════════════════
 async def cmd_start(u: Update, c: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_text(
-        f"🤖 ETH:`${all_stats['ETH']['current_margin']}` HYPE:`${all_stats['HYPE']['current_margin']}`\n"
-        "/status /bb /stats /history /balance", parse_mode="Markdown")
+        f"🤖 *ETH RSI Bot*\n"
+        f"Margin:`${stats['current_margin']}` | {'🟢 LONG' if position else '⚪ Wait'}\n"
+        f"Strategy: RSI>{RSI_BUY} BUY | RSI<{RSI_CLOSE} CLOSE | SL {int(STOP_LOSS_PCT*100)}%\n"
+        "/status /rsi /stats /history /balance", parse_mode="Markdown")
 
 async def cmd_status(u: Update, c: ContextTypes.DEFAULT_TYPE):
     try:
-        ec = await fetch_closes("ETHUSDT")
-        hc = await fetch_closes("HYPEUSDT")
-        ep = ec[-1]
-        hp = hc[-1]
-        _,_,_,er,_,_ = calc_indicators(ec)
-        _,_,_,hr,_,_ = calc_indicators(hc)
-        es = "🟢 LONG" if positions["ETH"] else "⚪ Wait"
-        hs = "🟢 LONG" if positions["HYPE"] else "⚪ Wait"
+        closes = await fetch_closes()
+        price  = closes[-1]
+        rsi    = calc_rsi(closes)
+        pos_status = "🟢 LONG" if position else "⚪ Wait"
+        sl_info = f"\nSL:`${sl_price:.2f}`" if position else ""
+        unrealized = ""
+        if position and entry_price > 0:
+            upnl = round((price - entry_price) * entry_size, 4)
+            unrealized = f"\nUnrealized:`${upnl:+.4f}`"
         await u.message.reply_text(
-            f"🔷 ETH:`${ep:,.2f}` RSI:`{er}` {es}\nMargin:`${all_stats['ETH']['current_margin']}`\n"
-            f"━━━━━━━━━━━━━━━\n"
-            f"🔶 HYPE:`${hp:.4f}` RSI:`{hr}` {hs}\nMargin:`${all_stats['HYPE']['current_margin']}`",
+            f"🔷 *ETH Status*\n"
+            f"Price:`${price:.2f}` | RSI:`{rsi}`\n"
+            f"Position: {pos_status}{sl_info}{unrealized}\n"
+            f"Margin:`${stats['current_margin']}`",
             parse_mode="Markdown")
-    except Exception as e:
-        await u.message.reply_text(f"❌ Error: {e}")
-
-async def cmd_bb(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    try:
-        lines = []
-        emojis = {"ETH": "🔷", "HYPE": "🔶", "LIT": "🟣"}
-        for token in MARKETS:
-            symbol = MARKETS[token]["symbol"]
-            closes = await fetch_closes(symbol)
-            upper, mid, lower, rsi, buy_sig, close_sig = calc_indicators(closes)
-            status = "🟢 BUY!" if buy_sig else ("🔴 CLOSE!" if close_sig else "🟡 Wait")
-            emoji = emojis.get(token, "🔸")
-            price = closes[-1]
-            lines.append(
-                f"{emoji} *{token}* RSI:`{rsi}` {status}\n"
-                f"U:`${upper:.4f}` M:`${mid:.4f}` L:`${lower:.4f}`"
-            )
-        await u.message.reply_text("\n".join(lines), parse_mode="Markdown")
     except Exception as e:
         await u.message.reply_text(f"❌ {e}")
 
+async def cmd_rsi(u: Update, c: ContextTypes.DEFAULT_TYPE):
+    try:
+        closes = await fetch_closes()
+        price  = closes[-1]
+        rsi    = calc_rsi(closes)
+        if rsi > RSI_BUY:
+            signal = "📈 BUY Signal!"
+        elif rsi < RSI_CLOSE:
+            signal = "📉 CLOSE Signal!"
+        else:
+            signal = "🟡 Wait"
+        await u.message.reply_text(
+            f"🔷 *ETH RSI*\n"
+            f"Price:`${price:.2f}`\n"
+            f"RSI:`{rsi}` → {signal}\n"
+            f"Buy>`{RSI_BUY}` | Close<`{RSI_CLOSE}` | SL`-{int(STOP_LOSS_PCT*100)}%`",
+            parse_mode="Markdown")
+    except Exception as e:
+        await u.message.reply_text(f"❌ {e}")
 
 async def cmd_stats(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    msg = ""
-    for token in MARKETS:
-        s = all_stats[token]; t = s["total_trades"]
-        wr = round(s["wins"]/max(t,1)*100,1)
-        g  = round(s["current_margin"]-MARKETS[token]["start_margin"],4)
-        icon = "🔷" if token=="ETH" else "🔶"
-        msg += f"{icon} *{token}* T:`{t}` WR:`{wr}%` M:`${s['current_margin']}` G:`${g:+.4f}`\n"
-    await u.message.reply_text(msg, parse_mode="Markdown")
+    t  = stats["total_trades"]
+    wr = round(stats["wins"] / max(t, 1) * 100, 1)
+    g  = round(stats["current_margin"] - ETH_MARKET["start_margin"], 4)
+    await u.message.reply_text(
+        f"📊 *ETH Stats*\n"
+        f"Trades:`{t}` | WR:`{wr}%`\n"
+        f"Wins:`{stats['wins']}` ✅ | Losses:`{stats['losses']}` ❌\n"
+        f"Total PnL:`${stats['total_pnl']:.4f}`\n"
+        f"Margin:`${stats['current_margin']}` (Growth:`${g:+.4f}`)\n"
+        f"Peak:`${stats['peak_margin']}`",
+        parse_mode="Markdown")
 
 async def cmd_history(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    msg = ""
-    for token in MARKETS:
-        icon = "🔷" if token=="ETH" else "🔶"
-        h = all_stats[token].get("history",[])
-        msg += f"{icon} *{token}*\n"
-        if not h: msg += "No trades\n"
-        else:
-            for t in reversed(h[-3:]):
-                msg += f"{t['result']} #{t['no']} `${t['pnl']:+.4f}` `${t['old_margin']}→${t['new_margin']}`\n"
+    h = stats.get("history", [])
+    if not h:
+        await u.message.reply_text("No trades yet!"); return
+    msg = "📜 *ETH Trade History*\n"
+    for t in reversed(h[-5:]):
+        reason = t.get("reason", "")
+        msg += f"{t['result']} #{t['no']} `${t['pnl']:+.4f}` [{reason}]\n"
+        msg += f"  `${t['old_margin']}→${t['new_margin']}` {t['time']}\n"
     await u.message.reply_text(msg, parse_mode="Markdown")
 
 async def cmd_balance(u: Update, c: ContextTypes.DEFAULT_TYPE):
     try:
-        async with httpx.AsyncClient(timeout=15) as c2:
-            r = await c2.get(
-                f"{BASE_URL}/api/v1/account",
-                params={"account_index": ACCOUNT_INDEX}
-            )
+        async with httpx.AsyncClient(timeout=15) as cl:
+            r = await cl.get(f"{BASE_URL}/api/v1/account",
+                params={"account_index": ACCOUNT_INDEX})
             data = r.json()
             collateral = data.get("account", {}).get("collateral", "N/A")
             unrealized = data.get("account", {}).get("total_unrealized_pnl", "0")
             await u.message.reply_text(
                 f"💰 *Balance*\n"
-                f"Collateral: `${collateral}`\n"
-                f"Unrealized PnL: `${unrealized}`",
+                f"Collateral:`${collateral}`\n"
+                f"Unrealized PnL:`${unrealized}`",
                 parse_mode="Markdown")
     except Exception as e:
         await u.message.reply_text(f"❌ {e}")
 
 async def main():
-    global tg_app, signer_client
+    global tg_app, signer_client, stats
+    stats = load_stats()
 
     signer_client = lighter.SignerClient(
         url=BASE_URL,
         api_private_keys={API_KEY_INDEX: LIGHTER_PRIVATE_KEY},
         account_index=ACCOUNT_INDEX
     )
+    tg_app = Application.builder().token(TELEGRAM_BOT_TOKEN).updater(None).build()
 
-    tg_app = (
-        Application.builder()
-        .token(TELEGRAM_BOT_TOKEN)
-        .updater(None)
-        .build()
-    )
-    for cmd, fn in [("start",cmd_start),("status",cmd_status),("bb",cmd_bb),
-                    ("stats",cmd_stats),("history",cmd_history),("balance",cmd_balance)]:
+    for cmd, fn in [
+        ("start",   cmd_start),
+        ("status",  cmd_status),
+        ("rsi",     cmd_rsi),
+        ("stats",   cmd_stats),
+        ("history", cmd_history),
+        ("balance", cmd_balance),
+    ]:
         tg_app.add_handler(CommandHandler(cmd, fn))
 
     await tg_app.initialize()
     await tg_app.start()
-    # Manual polling loop
+
     offset = None
     asyncio.create_task(strategy_loop())
     while True:
@@ -388,9 +371,9 @@ async def main():
                 offset = update.update_id + 1
                 await tg_app.process_update(update)
         except Exception as e:
-            logger.error(f"Polling error: {e}")
+            logger.error(f"Polling: {e}")
         await asyncio.sleep(1)
 
 if __name__ == "__main__":
     asyncio.run(main())
-            
+        
