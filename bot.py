@@ -20,7 +20,7 @@ LEVERAGE       = 5
 BB_PERIOD      = 20
 BB_STD         = 2
 RSI_PERIOD     = 14
-RSI_BUY        = 45
+RSI_BUY        = 40
 CHECK_INTERVAL = 900
 
 MARKETS = {
