@@ -44,12 +44,19 @@ MARKETS = {
         "min_size": 2.0,
         "leverage": 3,
         "start_margin": float(os.environ.get("LIT_MARGIN", "1.5")),
+    },
+    "SOL": {
+        "symbol": "SOLUSDT", "market_index": 2,
+        "stats_file": "sol_stats.json", "decimals": 3,
+        "min_size": 0.05,
+        "leverage": 6,
+        "start_margin": float(os.environ.get("SOL_MARGIN", "1")),
     }
 }
 
 # ETH uses Binance, HYPE uses OKX (no symbol override needed)
 
-positions     = {"ETH": False, "HYPE": False}
+positions     = {"ETH": False, "HYPE": False, "LIT": False, "SOL": False}
 all_stats     = {}
 signer_client = None
 tg_app        = None
@@ -256,14 +263,16 @@ async def strategy_loop():
     hype_pos = "🟢 LONG" if positions["HYPE"] else "⚪ None"
 
     lit_pos = "🟢 LONG" if positions.get("LIT") else "⚪ None"
+    sol_pos = "🟢 LONG" if positions.get("SOL") else "⚪ None"
     await send_tg(
         "🤖 *Bot Started!*\n"
         f"🔷 ETH `${MARKETS['ETH']['start_margin']}` | {eth_pos}\n"
         f"🔶 HYPE `${MARKETS['HYPE']['start_margin']}` | {hype_pos}\n"
         f"🟣 LIT `${MARKETS['LIT']['start_margin']}` | {lit_pos}\n"
+        f"🟤 SOL `${MARKETS['SOL']['start_margin']}` | {sol_pos}\n"
         f"⚡ {LEVERAGE}x | BB+RSI | 15min ✅"
     )
-    await asyncio.gather(token_loop("ETH"), token_loop("HYPE"), token_loop("LIT"))
+    await asyncio.gather(token_loop("ETH"), token_loop("HYPE"), token_loop("LIT"), token_loop("SOL"))
 
 async def cmd_start(u: Update, c: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_text(
@@ -384,4 +393,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-                
+    
