@@ -20,11 +20,12 @@ LEVERAGE       = 5
 RSI_PERIOD     = 14
 RSI_BUY        = 70       # RSI > 70 → BUY
 RSI_CLOSE      = 40       # RSI < 40 → CLOSE
+EMA_PERIOD     = 50       # Price > EMA50 → trend confirm
 STOP_LOSS_PCT  = 0.03     # 3% stop loss
 CHECK_INTERVAL = 900      # 15 min
 
 ETH_MARKET = {
-    "symbol":       "ETHUSDT",
+    "symbol":       "ETH-USDT-SWAP",
     "market_index": 0,
     "stats_file":   "eth_stats.json",
     "decimals":     2,
@@ -59,7 +60,6 @@ def save_stats():
 
 async def fetch_closes(limit=100):
     async with httpx.AsyncClient(timeout=15) as c:
-        # OKX for ETH (India-friendly)
         r = await c.get(
             "https://www.okx.com/api/v5/market/candles",
             params={"instId": "ETH-USDT-SWAP", "bar": "15m", "limit": str(limit)}
@@ -69,13 +69,21 @@ async def fetch_closes(limit=100):
             raise Exception(f"OKX ETH error: {data}")
         return [float(x[4]) for x in reversed(data["data"])]
 
-def calc_rsi(closes):
+def calc_indicators(closes):
     s     = pd.Series(closes)
+    # RSI
     delta = s.diff()
     gain  = delta.where(delta > 0, 0).ewm(com=RSI_PERIOD-1, adjust=False).mean()
     loss  = (-delta.where(delta < 0, 0)).ewm(com=RSI_PERIOD-1, adjust=False).mean()
     rsi   = round(float((100 - (100 / (1 + gain / loss))).iloc[-1]), 2)
-    return rsi
+    # EMA50
+    ema50 = round(float(s.ewm(span=EMA_PERIOD, adjust=False).mean().iloc[-1]), 2)
+    price = closes[-1]
+    above_ema = price > ema50
+    # Signals
+    buy_sig   = rsi > RSI_BUY and above_ema
+    close_sig = rsi < RSI_CLOSE
+    return rsi, ema50, above_ema, buy_sig, close_sig
 
 async def place_order(side, size, price, reduce_only=False):
     if side == "BUY":
@@ -139,8 +147,7 @@ async def strategy_loop():
         acc = lighter.AccountApi(api)
         r   = await acc.account(str(ACCOUNT_INDEX))
         await api.close()
-        open_positions = getattr(r, 'positions', []) or []
-        for pos in open_positions:
+        for pos in (getattr(r, 'positions', []) or []):
             if getattr(pos, 'market_index', -1) == ETH_MARKET["market_index"]:
                 size = float(getattr(pos, 'base_amount', 0) or 0)
                 if size > 0:
@@ -151,37 +158,40 @@ async def strategy_loop():
                     sl_price     = entry_price * (1 - STOP_LOSS_PCT) if entry_price > 0 else 0
                     logger.info("ETH position found on startup!")
     except Exception as e:
-        logger.error(f"Position check error: {e}")
+        logger.error(f"Position check: {e}")
 
     eth_pos = "🟢 LONG" if position else "⚪ None"
     await send_tg(
         "🤖 *ETH Bot Started!*\n"
         f"🔷 ETH `${stats['current_margin']}` | {eth_pos}\n"
-        f"⚡ {LEVERAGE}x | RSI>{RSI_BUY} BUY | RSI<{RSI_CLOSE} CLOSE | SL {int(STOP_LOSS_PCT*100)}%\n"
-        f"📊 15min | OKX data ✅"
+        f"⚡ {LEVERAGE}x | 15min | OKX data\n"
+        f"📈 RSI>`{RSI_BUY}` + Price>EMA`{EMA_PERIOD}` → BUY\n"
+        f"📉 RSI<`{RSI_CLOSE}` → CLOSE\n"
+        f"🛑 SL `{int(STOP_LOSS_PCT*100)}%` ✅"
     )
 
     while True:
         try:
             closes = await fetch_closes()
             price  = closes[-1]
-            rsi    = calc_rsi(closes)
-            logger.info(f"ETH=${price:.2f} RSI={rsi} Position={position} SL={sl_price:.2f}")
+            rsi, ema50, above_ema, buy_sig, close_sig = calc_indicators(closes)
+            ema_status = "✅" if above_ema else "❌"
+            logger.info(f"ETH=${price:.2f} RSI={rsi} EMA50={ema50} Above={above_ema} Pos={position}")
 
-            # BUY signal: RSI > 70
-            if not position and rsi > RSI_BUY:
+            # BUY: RSI > 70 AND price > EMA50
+            if not position and buy_sig:
                 margin = stats["current_margin"]
                 size   = calc_size(margin, price)
                 await send_tg(
                     f"🔷 *ETH BUY!*\n"
                     f"RSI:`{rsi}` > `{RSI_BUY}` 📈\n"
-                    f"Price:`${price:.2f}` | Size:`{size} ETH`\n"
-                    f"Margin:`${margin}` × `{LEVERAGE}x`\n"
+                    f"Price:`${price:.2f}` > EMA50:`${ema50}` {ema_status}\n"
+                    f"Size:`{size} ETH` | Margin:`${margin}` × `{LEVERAGE}x`\n"
                     f"SL:`${price*(1-STOP_LOSS_PCT):.2f}` (-{int(STOP_LOSS_PCT*100)}%)\n"
                     f"_Executing..._"
                 )
                 try:
-                    tx = await place_order("BUY", size, price)
+                    await place_order("BUY", size, price)
                     position     = True
                     entry_price  = price
                     entry_size   = size
@@ -201,7 +211,7 @@ async def strategy_loop():
                     await send_tg(f"❌ ETH BUY Failed: `{e}`")
 
             # CLOSE: RSI < 40
-            elif position and rsi < RSI_CLOSE:
+            elif position and close_sig:
                 await send_tg(
                     f"🔷 *ETH CLOSE!*\n"
                     f"RSI:`{rsi}` < `{RSI_CLOSE}` 📉\n"
@@ -222,12 +232,12 @@ async def strategy_loop():
                     position = False
                     await send_tg(f"❌ ETH CLOSE Failed: `{e}`")
 
-            # CLOSE: Stop Loss -3%
+            # STOP LOSS: -3%
             elif position and price <= sl_price:
                 await send_tg(
                     f"🛑 *ETH STOP LOSS!*\n"
                     f"Price:`${price:.2f}` ≤ SL:`${sl_price:.2f}`\n"
-                    f"Loss capped at -{int(STOP_LOSS_PCT*100)}%!"
+                    f"Loss capped -{int(STOP_LOSS_PCT*100)}%!"
                 )
                 try:
                     await place_order("SELL", entry_size, price, reduce_only=True)
@@ -244,6 +254,11 @@ async def strategy_loop():
                     position = False
                     await send_tg(f"❌ ETH SL Failed: `{e}`")
 
+            # No signal - log EMA status
+            elif not position:
+                if rsi > RSI_BUY and not above_ema:
+                    logger.info(f"RSI>{RSI_BUY} but Price below EMA50 - waiting for trend!")
+
         except Exception as e:
             logger.error(f"ETH loop: {e}")
         await asyncio.sleep(CHECK_INTERVAL)
@@ -253,17 +268,23 @@ async def strategy_loop():
 # ═══════════════════════════════════════
 async def cmd_start(u: Update, c: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_text(
-        f"🤖 *ETH RSI Bot*\n"
+        f"🤖 *ETH RSI+EMA Bot*\n"
         f"Margin:`${stats['current_margin']}` | {'🟢 LONG' if position else '⚪ Wait'}\n"
-        f"Strategy: RSI>{RSI_BUY} BUY | RSI<{RSI_CLOSE} CLOSE | SL {int(STOP_LOSS_PCT*100)}%\n"
-        "/status /rsi /stats /history /balance", parse_mode="Markdown")
+        f"RSI>`{RSI_BUY}` + EMA`{EMA_PERIOD}` → BUY\n"
+        f"RSI<`{RSI_CLOSE}` → CLOSE | SL`{int(STOP_LOSS_PCT*100)}%`\n"
+        "/status /rsi /stats /history /balance",
+        parse_mode="Markdown")
 
 async def cmd_status(u: Update, c: ContextTypes.DEFAULT_TYPE):
     try:
         closes = await fetch_closes()
         price  = closes[-1]
-        rsi    = calc_rsi(closes)
+        rsi, ema50, above_ema, buy_sig, close_sig = calc_indicators(closes)
         pos_status = "🟢 LONG" if position else "⚪ Wait"
+        ema_icon   = "✅ Above" if above_ema else "❌ Below"
+        signal = ""
+        if buy_sig: signal = "\n🚨 BUY SIGNAL!"
+        elif close_sig and position: signal = "\n🚨 CLOSE SIGNAL!"
         sl_info = f"\nSL:`${sl_price:.2f}`" if position else ""
         unrealized = ""
         if position and entry_price > 0:
@@ -272,7 +293,8 @@ async def cmd_status(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await u.message.reply_text(
             f"🔷 *ETH Status*\n"
             f"Price:`${price:.2f}` | RSI:`{rsi}`\n"
-            f"Position: {pos_status}{sl_info}{unrealized}\n"
+            f"EMA50:`${ema50}` {ema_icon}\n"
+            f"Position: {pos_status}{sl_info}{unrealized}{signal}\n"
             f"Margin:`${stats['current_margin']}`",
             parse_mode="Markdown")
     except Exception as e:
@@ -282,18 +304,17 @@ async def cmd_rsi(u: Update, c: ContextTypes.DEFAULT_TYPE):
     try:
         closes = await fetch_closes()
         price  = closes[-1]
-        rsi    = calc_rsi(closes)
-        if rsi > RSI_BUY:
-            signal = "📈 BUY Signal!"
-        elif rsi < RSI_CLOSE:
-            signal = "📉 CLOSE Signal!"
-        else:
-            signal = "🟡 Wait"
+        rsi, ema50, above_ema, buy_sig, close_sig = calc_indicators(closes)
+        ema_icon = "✅" if above_ema else "❌"
+        if buy_sig:     signal = "🚨 BUY Signal!"
+        elif close_sig: signal = "📉 CLOSE Signal!"
+        else:           signal = "🟡 Wait"
         await u.message.reply_text(
-            f"🔷 *ETH RSI*\n"
+            f"🔷 *ETH Indicators*\n"
             f"Price:`${price:.2f}`\n"
-            f"RSI:`{rsi}` → {signal}\n"
-            f"Buy>`{RSI_BUY}` | Close<`{RSI_CLOSE}` | SL`-{int(STOP_LOSS_PCT*100)}%`",
+            f"RSI:`{rsi}` (Buy>`{RSI_BUY}` Close<`{RSI_CLOSE}`)\n"
+            f"EMA50:`${ema50}` {ema_icon}\n"
+            f"Signal: {signal}",
             parse_mode="Markdown")
     except Exception as e:
         await u.message.reply_text(f"❌ {e}")
@@ -305,9 +326,9 @@ async def cmd_stats(u: Update, c: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_text(
         f"📊 *ETH Stats*\n"
         f"Trades:`{t}` | WR:`{wr}%`\n"
-        f"Wins:`{stats['wins']}` ✅ | Losses:`{stats['losses']}` ❌\n"
+        f"✅ Wins:`{stats['wins']}` | ❌ Losses:`{stats['losses']}`\n"
         f"Total PnL:`${stats['total_pnl']:.4f}`\n"
-        f"Margin:`${stats['current_margin']}` (Growth:`${g:+.4f}`)\n"
+        f"Margin:`${stats['current_margin']}` Growth:`${g:+.4f}`\n"
         f"Peak:`${stats['peak_margin']}`",
         parse_mode="Markdown")
 
@@ -317,8 +338,7 @@ async def cmd_history(u: Update, c: ContextTypes.DEFAULT_TYPE):
         await u.message.reply_text("No trades yet!"); return
     msg = "📜 *ETH Trade History*\n"
     for t in reversed(h[-5:]):
-        reason = t.get("reason", "")
-        msg += f"{t['result']} #{t['no']} `${t['pnl']:+.4f}` [{reason}]\n"
+        msg += f"{t['result']} #{t['no']} `${t['pnl']:+.4f}` [{t.get('reason','')}]\n"
         msg += f"  `${t['old_margin']}→${t['new_margin']}` {t['time']}\n"
     await u.message.reply_text(msg, parse_mode="Markdown")
 
@@ -328,12 +348,12 @@ async def cmd_balance(u: Update, c: ContextTypes.DEFAULT_TYPE):
             r = await cl.get(f"{BASE_URL}/api/v1/account",
                 params={"account_index": ACCOUNT_INDEX})
             data = r.json()
-            collateral = data.get("account", {}).get("collateral", "N/A")
-            unrealized = data.get("account", {}).get("total_unrealized_pnl", "0")
+            col = data.get("account", {}).get("collateral", "N/A")
+            upnl= data.get("account", {}).get("total_unrealized_pnl", "0")
             await u.message.reply_text(
                 f"💰 *Balance*\n"
-                f"Collateral:`${collateral}`\n"
-                f"Unrealized PnL:`${unrealized}`",
+                f"Collateral:`${col}`\n"
+                f"Unrealized PnL:`${upnl}`",
                 parse_mode="Markdown")
     except Exception as e:
         await u.message.reply_text(f"❌ {e}")
@@ -366,7 +386,8 @@ async def main():
     asyncio.create_task(strategy_loop())
     while True:
         try:
-            updates = await tg_app.bot.get_updates(offset=offset, timeout=10, allowed_updates=["message"])
+            updates = await tg_app.bot.get_updates(
+                offset=offset, timeout=10, allowed_updates=["message"])
             for update in updates:
                 offset = update.update_id + 1
                 await tg_app.process_update(update)
@@ -376,4 +397,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-        
+    
