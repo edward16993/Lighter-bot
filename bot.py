@@ -488,4 +488,13 @@ async def main():
     while True:
         try:
             updates = await tg_app.bot.get_updates(
-                offset=offse
+                offset=offset, timeout=10, allowed_updates=["message"])
+            for update in updates:
+                offset = update.update_id + 1
+                await tg_app.process_update(update)
+        except Exception as e:
+            logger.error(f"Polling: {e}")
+        await asyncio.sleep(1)
+
+if __name__ == "__main__":
+    asyncio.run(main())
