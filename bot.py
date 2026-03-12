@@ -1,453 +1,385 @@
 # -*- coding: utf-8 -*-
-import os, asyncio, logging, json
+import os,asyncio,logging,json
 import numpy as np
 from datetime import datetime
-import pandas as pd
-import httpx
+import pandas as pd,httpx
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application,CommandHandler,ContextTypes
 import lighter
 
-logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
-logger = logging.getLogger(__name__)
+logging.basicConfig(format="%(asctime)s-%(levelname)s-%(message)s",level=logging.INFO)
+logger=logging.getLogger(__name__)
 
-TELEGRAM_BOT_TOKEN  = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID    = os.environ["TELEGRAM_CHAT_ID"]
-ACCOUNT_INDEX       = int(os.environ["ACCOUNT_INDEX"])
-API_KEY_INDEX       = int(os.environ["API_KEY_INDEX"])
-LIGHTER_PRIVATE_KEY = os.environ["LIGHTER_PRIVATE_KEY"]
+TG_TOKEN =os.environ["TELEGRAM_BOT_TOKEN"]
+TG_CHAT  =os.environ["TELEGRAM_CHAT_ID"]
+ACC_IDX  =int(os.environ["ACCOUNT_INDEX"])
+KEY_IDX  =int(os.environ["API_KEY_INDEX"])
+PRV_KEY  =os.environ["LIGHTER_PRIVATE_KEY"]
 
-BASE_URL       = "https://mainnet.zklighter.elliot.ai"
-LEVERAGE       = 5
-CHECK_INTERVAL = 300
-SL_ATR_MULT    = float(os.environ.get("SL_MULT", "2.0"))
-TP_ATR_MULT    = float(os.environ.get("TP_MULT", "3.0"))
-ADX_THRESHOLD  = 20.0
-MIN_MARGIN     = 0.50
-MARKET_INDEX   = 0
-SYMBOL         = "ETH-USDT-SWAP"
-STATS_FILE     = "eth_stats.json"
-START_MARGIN   = float(os.environ.get("ETH_MARGIN", "50"))
-DECIMALS       = 3
-MIN_SIZE       = 0.002
+URL      ="https://mainnet.zklighter.elliot.ai"
+LEV      =5
+INTERVAL =300
+SL_M     =float(os.environ.get("SL_MULT","2.0"))
+TP_M     =float(os.environ.get("TP_MULT","3.0"))
+ADX_T    =20.0
+MIN_M    =0.50
+MKT      =0
+SYM      ="ETH-USDT-SWAP"
+SF       ="stats.json"
+START_M  =float(os.environ.get("ETH_MARGIN","50"))
+DEC      =3
+MIN_SZ   =0.002
 
-position      = None
-entry_price   = 0.0
-entry_size    = 0.0
-entry_margin  = 0.0
-sl_price      = 0.0
-tp_price      = 0.0
-tg_app        = None
-signer_client = None
-stats         = {}
+pos=None; ep=0.0; esz=0.0; em=0.0; slp=0.0; tpp=0.0
+app=None; sc=None; st={}
 
-def load_stats():
+def load_st():
     try:
-        with open(STATS_FILE) as f:
-            return json.load(f)
-    except Exception:
-        return {
-            "total_trades": 0, "wins": 0, "losses": 0,
-            "total_pnl": 0.0, "current_margin": START_MARGIN,
-            "peak_margin": START_MARGIN, "long_trades": 0, "short_trades": 0,
-            "entry_price": 0.0, "entry_size": 0.0, "entry_margin": 0.0,
-            "sl_price": 0.0, "tp_price": 0.0, "history": []
-        }
+        with open(SF) as f: return json.load(f)
+    except:
+        return {"total_trades":0,"wins":0,"losses":0,"total_pnl":0.0,
+                "current_margin":START_M,"peak_margin":START_M,
+                "long_trades":0,"short_trades":0,"entry_price":0.0,
+                "entry_size":0.0,"entry_margin":0.0,"sl_price":0.0,
+                "tp_price":0.0,"history":[]}
 
-def save_stats():
-    with open(STATS_FILE, "w") as f:
-        json.dump(stats, f, indent=2)
+def save_st():
+    with open(SF,"w") as f: json.dump(st,f)
 
-def calc_alma(series, period, sigma=0.85, offset=0.85):
-    m = offset * (period - 1)
-    s = period / sigma
-    weights = np.array([np.exp(-((i - m)**2) / (2 * s**2)) for i in range(period)])
-    weights /= weights.sum()
-    result = pd.Series(np.nan, index=series.index)
-    for i in range(period-1, len(series)):
-        result.iloc[i] = np.dot(weights, series.iloc[i-period+1:i+1].values)
-    return result
+def alma(s,p,sig=0.85,off=0.85):
+    m=off*(p-1); sv=p/sig
+    w=np.array([np.exp(-((i-m)**2)/(2*sv**2)) for i in range(p)])
+    w/=w.sum()
+    r=pd.Series(np.nan,index=s.index)
+    for i in range(p-1,len(s)):
+        r.iloc[i]=np.dot(w,s.iloc[i-p+1:i+1].values)
+    return r
 
-def calc_atr(df, period=10):
-    tr = pd.concat([
-        df["high"] - df["low"],
-        (df["high"] - df["close"].shift()).abs(),
-        (df["low"]  - df["close"].shift()).abs()
-    ], axis=1).max(axis=1)
-    return tr.ewm(span=period, adjust=False).mean()
+def atr(df,p=10):
+    tr=pd.concat([df["high"]-df["low"],
+        (df["high"]-df["close"].shift()).abs(),
+        (df["low"]-df["close"].shift()).abs()],axis=1).max(axis=1)
+    return tr.ewm(span=p,adjust=False).mean()
 
-def calc_adx(df, period=14):
-    tr   = calc_atr(df, period)
-    dm_p = (df["high"].diff()).clip(lower=0)
-    dm_m = (-df["low"].diff()).clip(lower=0)
-    dm_p = dm_p.where(dm_p > dm_m, 0)
-    dm_m = dm_m.where(dm_m > dm_p, 0)
-    di_p = 100 * dm_p.ewm(span=period, adjust=False).mean() / tr.replace(0, np.nan)
-    di_m = 100 * dm_m.ewm(span=period, adjust=False).mean() / tr.replace(0, np.nan)
-    dx   = 100 * (di_p - di_m).abs() / (di_p + di_m).replace(0, np.nan)
-    return dx.ewm(span=period, adjust=False).mean()
+def adx(df,p=14):
+    tr=atr(df,p)
+    dp=(df["high"].diff()).clip(lower=0)
+    dm=(-df["low"].diff()).clip(lower=0)
+    dp=dp.where(dp>dm,0); dm=dm.where(dm>dp,0)
+    dip=100*dp.ewm(span=p,adjust=False).mean()/tr.replace(0,np.nan)
+    dim=100*dm.ewm(span=p,adjust=False).mean()/tr.replace(0,np.nan)
+    dx=100*(dip-dim).abs()/(dip+dim).replace(0,np.nan)
+    return dx.ewm(span=p,adjust=False).mean()
 
-def calc_rsi(series, period=14):
-    delta = series.diff()
-    gain  = delta.clip(lower=0).ewm(span=period, adjust=False).mean()
-    loss  = (-delta.clip(upper=0)).ewm(span=period, adjust=False).mean()
-    rs    = gain / loss.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
+def rsi(s,p=14):
+    d=s.diff()
+    g=d.clip(lower=0).ewm(span=p,adjust=False).mean()
+    l=(-d.clip(upper=0)).ewm(span=p,adjust=False).mean()
+    return 100-(100/(1+g/l.replace(0,np.nan)))
 
-def calc_indicators(df):
-    df = df.copy()
-    df["alma_fast"] = calc_alma(df["close"], 13)
-    df["alma_slow"] = calc_alma(df["close"], 21)
-    df["ema200"]    = df["close"].ewm(span=200, adjust=False).mean()
-    df["atr"]       = calc_atr(df, 10)
-    df["rsi"]       = calc_rsi(df["close"], 14)
-    df["adx"]       = calc_adx(df, 14)
+def indicators(df):
+    df=df.copy()
+    df["af"]=alma(df["close"],13)
+    df["as"]=alma(df["close"],21)
+    df["e2"]=df["close"].ewm(span=200,adjust=False).mean()
+    df["at"]=atr(df,10)
+    df["rs"]=rsi(df["close"],14)
+    df["ax"]=adx(df,14)
     return df
 
-async def fetch_candles(limit=300):
+async def candles(lim=300):
     async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.get(
-            "https://www.okx.com/api/v5/market/candles",
-            params={"instId": SYMBOL, "bar": "5m", "limit": str(limit)}
-        )
-        data = r.json().get("data", [])
-    df = pd.DataFrame(data)[[0, 2, 3, 4]].copy()
-    df.columns = ["time", "high", "low", "close"]
-    for col in ["high", "low", "close"]:
-        df[col] = df[col].astype(float)
-    df["time"] = pd.to_datetime(df["time"].astype(int), unit="ms")
+        r=await c.get("https://www.okx.com/api/v5/market/candles",
+            params={"instId":SYM,"bar":"5m","limit":str(lim)})
+        data=r.json().get("data",[])
+    df=pd.DataFrame(data)[[0,2,3,4]].copy()
+    df.columns=["time","high","low","close"]
+    for col in ["high","low","close"]: df[col]=df[col].astype(float)
+    df["time"]=pd.to_datetime(df["time"].astype(int),unit="ms")
     return df.sort_values("time").reset_index(drop=True)
 
-async def place_order(side, size, price, reduce_only=False):
-    slippage  = 0.002
-    if side == "BUY":
-        order_price = round(price * (1 + slippage), 2)
-    else:
-        order_price = round(price * (1 - slippage), 2)
-    base_amt = int(size * 10000)
-    logger.info("Order: %s %s ETH @ ~%.2f", side, size, price)
-    tx, tx_hash, err = await signer_client.create_order(
-        market_index=MARKET_INDEX,
+async def order(side,size,price,ro=False):
+    slp=0.002
+    op=round(price*(1+slp),2) if side=="BUY" else round(price*(1-slp),2)
+    ba=int(size*10000)
+    tx,txh,err=await sc.create_order(
+        market_index=MKT,
         client_order_index=int(datetime.now().timestamp()),
-        base_amount=base_amt,
-        price=order_price,
-        is_ask=(side == "SELL"),
-        order_type=signer_client.ORDER_TYPE_MARKET,
-        time_in_force=signer_client.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL,
-        reduce_only=reduce_only,
-        order_expiry=signer_client.DEFAULT_IOC_EXPIRY,
-    )
-    if err:
-        raise Exception(str(err))
-    return tx_hash
+        base_amount=ba,price=op,is_ask=(side=="SELL"),
+        order_type=sc.ORDER_TYPE_MARKET,
+        time_in_force=sc.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL,
+        reduce_only=ro,order_expiry=sc.DEFAULT_IOC_EXPIRY)
+    if err: raise Exception(str(err))
+    return txh
 
-def calc_size(margin, price):
-    size = (margin * LEVERAGE) / price
-    size = max(size, MIN_SIZE)
-    return round(size, DECIMALS)
+def sz(margin,price):
+    return round(max((margin*LEV)/price,MIN_SZ),DEC)
 
-def record_close(exit_price, reason, side):
-    global stats
-    if side == "LONG":
-        pnl = round((exit_price - stats["entry_price"]) * stats["entry_size"], 4)
-    else:
-        pnl = round((stats["entry_price"] - exit_price) * stats["entry_size"], 4)
-    new_m = round(max(stats["entry_margin"] + pnl, MIN_MARGIN), 4)
-    stats["total_trades"] += 1
-    stats["total_pnl"]    += round(pnl, 4)
-    stats["current_margin"] = new_m
-    if new_m > stats["peak_margin"]:
-        stats["peak_margin"] = new_m
-    result = "WIN" if pnl >= 0 else "LOSS"
-    if pnl >= 0:
-        stats["wins"] += 1
-    else:
-        stats["losses"] += 1
-    stats["history"].append({
-        "no": stats["total_trades"], "side": side,
-        "entry": stats["entry_price"], "exit": exit_price,
-        "pnl": pnl, "reason": reason,
-        "old_margin": stats["entry_margin"], "new_margin": new_m,
-        "result": result, "time": datetime.now().strftime("%Y-%m-%d %H:%M")
-    })
-    stats["history"] = stats["history"][-20:]
-    save_stats()
-    return pnl, new_m, result
+def close_trade(xp,reason,side):
+    global st
+    pnl=round(((xp-st["entry_price"])*st["entry_size"]) if side=="LONG"
+               else ((st["entry_price"]-xp)*st["entry_size"]),4)
+    nm=round(max(st["entry_margin"]+pnl,MIN_M),4)
+    st["total_trades"]+=1; st["total_pnl"]+=round(pnl,4)
+    st["current_margin"]=nm
+    if nm>st["peak_margin"]: st["peak_margin"]=nm
+    if pnl>=0: st["wins"]+=1
+    else: st["losses"]+=1
+    st["history"].append({"no":st["total_trades"],"side":side,
+        "entry":st["entry_price"],"exit":xp,"pnl":pnl,"reason":reason,
+        "new_margin":nm,"time":datetime.now().strftime("%Y-%m-%d %H:%M")})
+    st["history"]=st["history"][-20:]
+    save_st()
+    return pnl,nm,"WIN" if pnl>=0 else "LOSS"
 
-async def send_tg(msg):
+async def tg(msg):
+    try: await app.bot.send_message(chat_id=TG_CHAT,text=msg,parse_mode="Markdown")
+    except Exception as e: logger.error("TG:%s",e)
+
+async def loop_main():
+    global pos,ep,esz,em,slp,tpp,st
     try:
-        await tg_app.bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg, parse_mode="Markdown")
-    except Exception as e:
-        logger.error("TG: %s", e)
+        api=lighter.ApiClient(lighter.Configuration(host=URL))
+        acc=lighter.AccountApi(api)
+        r=await acc.account(str(ACC_IDX)); await api.close()
+        for p2 in (getattr(r,"positions",[]) or []):
+            if getattr(p2,"market_index",-1)==MKT:
+                s2=float(getattr(p2,"base_amount",0) or 0)
+                if s2!=0:
+                    pos="LONG" if s2>0 else "SHORT"
+                    ep=float(st.get("entry_price",0))
+                    esz=abs(s2); em=float(st.get("entry_margin",0))
+                    slp=float(st.get("sl_price",0)); tpp=float(st.get("tp_price",0))
+    except Exception as e: logger.error("Init:%s",e)
 
-async def strategy_loop():
-    global position, entry_price, entry_size, entry_margin, sl_price, tp_price, stats
-
-    try:
-        api = lighter.ApiClient(lighter.Configuration(host=BASE_URL))
-        acc = lighter.AccountApi(api)
-        r   = await acc.account(str(ACCOUNT_INDEX))
-        await api.close()
-        for pos in (getattr(r, "positions", []) or []):
-            if getattr(pos, "market_index", -1) == MARKET_INDEX:
-                size = float(getattr(pos, "base_amount", 0) or 0)
-                if size != 0:
-                    position     = "LONG" if size > 0 else "SHORT"
-                    entry_price  = float(stats.get("entry_price", 0))
-                    entry_size   = abs(size)
-                    entry_margin = float(stats.get("entry_margin", 0))
-                    sl_price     = float(stats.get("sl_price", 0))
-                    tp_price     = float(stats.get("tp_price", 0))
-                    logger.info("ETH %s position restored!", position)
-    except Exception as e:
-        logger.error("Startup check: %s", e)
-
-    pos_str = position if position else "Wait"
-    await send_tg(
-        "*ALMA Long+Short Bot*\n"
-        "Margin: $" + str(stats["current_margin"]) + " | " + pos_str + "\n"
-        "Long:  ALMA(13/21) cross + EMA200 + ADX>20\n"
-        "Short: ALMA(13/21) cross + RSI<50  + ADX>20\n"
-        "Leverage:" + str(LEVERAGE) + "x | 5min | SL:" + str(SL_ATR_MULT) + "x TP:" + str(TP_ATR_MULT) + "x"
-    )
+    ps=pos if pos else "Wait"
+    await tg("*ALMA Bot Started*\n"
+             "Margin:$"+str(st["current_margin"])+" | "+ps+"\n"
+             "Long: ALMA(13/21)+EMA200+ADX>20\n"
+             "Short: ALMA(13/21)+RSI<50+ADX>20\n"
+             +str(LEV)+"x | 5min | SL:"+str(SL_M)+"x TP:"+str(TP_M)+"x")
 
     while True:
         try:
-            df   = await fetch_candles(300)
-            df   = calc_indicators(df)
-            df   = df.dropna()
-            curr = df.iloc[-1]
-            prev = df.iloc[-2]
-            price = curr["close"]
-            atr   = curr["atr"]
-            rsi   = curr["rsi"]
-            adx   = curr["adx"]
+            df=await candles(300); df=indicators(df); df=df.dropna()
+            cu=df.iloc[-1]; pv=df.iloc[-2]
+            price=cu["close"]; at2=cu["at"]; rs2=cu["rs"]; ax2=cu["ax"]
+            bc=(cu["af"]>cu["as"]) and (pv["af"]<=pv["as"])
+            ec=(cu["af"]<cu["as"]) and (pv["af"]>=pv["as"])
+            bt=price>cu["e2"]; tr=ax2>ADX_T
+            ls=bc and bt and tr; ss=ec and (rs2<50) and tr
+            logger.info("ETH=$%.2f RSI=%.1f ADX=%.1f pos=%s",price,rs2,ax2,pos)
 
-            bull_cross   = (curr["alma_fast"] > curr["alma_slow"]) and (prev["alma_fast"] <= prev["alma_slow"])
-            bear_cross   = (curr["alma_fast"] < curr["alma_slow"]) and (prev["alma_fast"] >= prev["alma_slow"])
-            bull_trend   = price > curr["ema200"]
-            adx_trending = adx > ADX_THRESHOLD
-            long_signal  = bull_cross and bull_trend and adx_trending
-            short_signal = bear_cross and (rsi < 50) and adx_trending
-
-            logger.info("ETH=$%.2f RSI=%.1f ADX=%.1f Bull=%s Trending=%s Pos=%s",
-                        price, rsi, adx, bull_trend, adx_trending, position)
-
-            if position is None:
-                if long_signal and stats["current_margin"] >= MIN_MARGIN:
-                    margin = stats["current_margin"]
-                    size   = calc_size(margin, price)
-                    new_sl = round(price - (SL_ATR_MULT * atr), 2)
-                    new_tp = round(price + (TP_ATR_MULT * atr), 2)
-                    sl_pct = round((price - new_sl) / price * 100, 2)
-                    tp_pct = round((new_tp - price) / price * 100, 2)
-                    await send_tg(
-                        "*ETH LONG Signal!*\n"
-                        "ALMA(13/21) cross + EMA200 + ADX>" + str(ADX_THRESHOLD) + "\n"
-                        "Price: $" + str(round(price, 2)) + " RSI: " + str(round(rsi, 1)) + " ADX: " + str(round(adx, 1)) + "\n"
-                        "SL: $" + str(new_sl) + " (-" + str(sl_pct) + "%)\n"
-                        "TP: $" + str(new_tp) + " (+" + str(tp_pct) + "%)\n"
-                        "Size: " + str(size) + " ETH | Margin: $" + str(margin) + " x" + str(LEVERAGE)
-                    )
+            if pos is None:
+                if ls and st["current_margin"]>=MIN_M:
+                    mg=st["current_margin"]; si=sz(mg,price)
+                    nsl=round(price-(SL_M*at2),2); ntp=round(price+(TP_M*at2),2)
+                    await tg("*ETH LONG*\nPrice:$"+str(round(price,2))+" ADX:"+str(round(ax2,1))+"\nSL:$"+str(nsl)+" TP:$"+str(ntp)+"\nMargin:$"+str(mg))
                     try:
-                        await place_order("BUY", size, price)
-                        position     = "LONG"
-                        entry_price  = price
-                        entry_size   = size
-                        entry_margin = margin
-                        sl_price     = new_sl
-                        tp_price     = new_tp
-                        stats["entry_price"]   = price
-                        stats["entry_size"]    = size
-                        stats["entry_margin"]  = margin
-                        stats["sl_price"]      = new_sl
-                        stats["tp_price"]      = new_tp
-                        stats["long_trades"]   = stats.get("long_trades", 0) + 1
-                        save_stats()
-                        await send_tg(
-                            "*ETH LONG Opened!*\n"
-                            "Entry: $" + str(round(price, 2)) + " | Size: " + str(size) + " ETH\n"
-                            "SL: $" + str(new_sl) + " | TP: $" + str(new_tp) + "\n"
-                            "Margin: $" + str(margin)
-                        )
+                        await order("BUY",si,price)
+                        pos="LONG"; ep=price; esz=si; em=mg; slp=nsl; tpp=ntp
+                        st["entry_price"]=price; st["entry_size"]=si
+                        st["entry_margin"]=mg; st["sl_price"]=nsl; st["tp_price"]=ntp
+                        st["long_trades"]=st.get("long_trades",0)+1; save_st()
+                        await tg("*LONG Opened!*\n$"+str(round(price,2))+" | "+str(si)+" ETH")
                     except Exception as e:
-                        position = None
-                        await send_tg("ETH LONG Failed: " + str(e))
+                        pos=None; await tg("LONG Failed:"+str(e))
 
-                elif short_signal and stats["current_margin"] >= MIN_MARGIN:
-                    margin = stats["current_margin"]
-                    size   = calc_size(margin, price)
-                    new_sl = round(price + (SL_ATR_MULT * atr), 2)
-                    new_tp = round(price - (TP_ATR_MULT * atr), 2)
-                    sl_pct = round((new_sl - price) / price * 100, 2)
-                    tp_pct = round((price - new_tp) / price * 100, 2)
-                    await send_tg(
-                        "*ETH SHORT Signal!*\n"
-                        "ALMA(13/21) cross + RSI<50 + ADX>" + str(ADX_THRESHOLD) + "\n"
-                        "Price: $" + str(round(price, 2)) + " RSI: " + str(round(rsi, 1)) + " ADX: " + str(round(adx, 1)) + "\n"
-                        "SL: $" + str(new_sl) + " (+" + str(sl_pct) + "%)\n"
-                        "TP: $" + str(new_tp) + " (-" + str(tp_pct) + "%)\n"
-                        "Size: " + str(size) + " ETH | Margin: $" + str(margin) + " x" + str(LEVERAGE)
-                    )
+                elif ss and st["current_margin"]>=MIN_M:
+                    mg=st["current_margin"]; si=sz(mg,price)
+                    nsl=round(price+(SL_M*at2),2); ntp=round(price-(TP_M*at2),2)
+                    await tg("*ETH SHORT*\nPrice:$"+str(round(price,2))+" ADX:"+str(round(ax2,1))+"\nSL:$"+str(nsl)+" TP:$"+str(ntp)+"\nMargin:$"+str(mg))
                     try:
-                        await place_order("SELL", size, price)
-                        position     = "SHORT"
-                        entry_price  = price
-                        entry_size   = size
-                        entry_margin = margin
-                        sl_price     = new_sl
-                        tp_price     = new_tp
-                        stats["entry_price"]   = price
-                        stats["entry_size"]    = size
-                        stats["entry_margin"]  = margin
-                        stats["sl_price"]      = new_sl
-                        stats["tp_price"]      = new_tp
-                        stats["short_trades"]  = stats.get("short_trades", 0) + 1
-                        save_stats()
-                        await send_tg(
-                            "*ETH SHORT Opened!*\n"
-                            "Entry: $" + str(round(price, 2)) + " | Size: " + str(size) + " ETH\n"
-                            "SL: $" + str(new_sl) + " | TP: $" + str(new_tp) + "\n"
-                            "Margin: $" + str(margin)
-                        )
+                        await order("SELL",si,price)
+                        pos="SHORT"; ep=price; esz=si; em=mg; slp=nsl; tpp=ntp
+                        st["entry_price"]=price; st["entry_size"]=si
+                        st["entry_margin"]=mg; st["sl_price"]=nsl; st["tp_price"]=ntp
+                        st["short_trades"]=st.get("short_trades",0)+1; save_st()
+                        await tg("*SHORT Opened!*\n$"+str(round(price,2))+" | "+str(si)+" ETH")
                     except Exception as e:
-                        position = None
-                        await send_tg("ETH SHORT Failed: " + str(e))
+                        pos=None; await tg("SHORT Failed:"+str(e))
 
-            elif position == "LONG":
-                unrealized = round((price - entry_price) * entry_size, 4)
-                reason = None
-                if price >= tp_price:
-                    reason = "TP"
-                elif price <= sl_price:
-                    reason = "SL"
-                elif bear_cross:
-                    reason = "Cross"
-                if reason:
-                    lbl = "TP HIT" if reason == "TP" else "SL HIT" if reason == "SL" else "Cross Exit"
-                    await send_tg(
-                        "*ETH LONG " + lbl + "*\n"
-                        "Price: $" + str(round(price, 2)) + " | Unrealized: $" + str(unrealized)
-                    )
+            elif pos=="LONG":
+                un=round((price-ep)*esz,4); rs3=None
+                if price>=tpp: rs3="TP"
+                elif price<=slp: rs3="SL"
+                elif ec: rs3="Cross"
+                if rs3:
+                    await tg("*LONG "+rs3+"*\n$"+str(round(price,2))+" Unr:$"+str(un))
                     try:
-                        await place_order("SELL", entry_size, price, reduce_only=True)
-                        pnl, new_m, outcome = record_close(price, reason, "LONG")
-                        wr = round(stats["wins"] / max(stats["total_trades"], 1) * 100, 1)
-                        await send_tg(
-                            outcome + " *ETH LONG #" + str(stats["total_trades"]) + "* [" + reason + "]\n"
-                            "Entry: $" + str(entry_price) + " -> Exit: $" + str(round(price, 2)) + "\n"
-                            "PnL: $" + str(pnl) + " | WR: " + str(wr) + "%\n"
-                            "Margin: $" + str(new_m)
-                        )
-                        position = None
-                    except Exception as e:
-                        await send_tg("ETH LONG Close Failed: " + str(e))
+                        await order("SELL",esz,price,ro=True)
+                        pnl,nm,oc=close_trade(price,rs3,"LONG")
+                        wr=round(st["wins"]/max(st["total_trades"],1)*100,1)
+                        await tg(oc+" *LONG #"+str(st["total_trades"])+"* ["+rs3+"]\n$"+str(ep)+"->$"+str(round(price,2))+"\nPnL:$"+str(pnl)+" WR:"+str(wr)+"%\nMargin:$"+str(nm))
+                        pos=None
+                    except Exception as e: await tg("LONG Close Failed:"+str(e))
 
-            elif position == "SHORT":
-                unrealized = round((entry_price - price) * entry_size, 4)
-                reason = None
-                if price <= tp_price:
-                    reason = "TP"
-                elif price >= sl_price:
-                    reason = "SL"
-                elif bull_cross:
-                    reason = "Cross"
-                if reason:
-                    lbl = "TP HIT" if reason == "TP" else "SL HIT" if reason == "SL" else "Cross Exit"
-                    await send_tg(
-                        "*ETH SHORT " + lbl + "*\n"
-                        "Price: $" + str(round(price, 2)) + " | Unrealized: $" + str(unrealized)
-                    )
+            elif pos=="SHORT":
+                un=round((ep-price)*esz,4); rs3=None
+                if price<=tpp: rs3="TP"
+                elif price>=slp: rs3="SL"
+                elif bc: rs3="Cross"
+                if rs3:
+                    await tg("*SHORT "+rs3+"*\n$"+str(round(price,2))+" Unr:$"+str(un))
                     try:
-                        await place_order("BUY", entry_size, price, reduce_only=True)
-                        pnl, new_m, outcome = record_close(price, reason, "SHORT")
-                        wr = round(stats["wins"] / max(stats["total_trades"], 1) * 100, 1)
-                        await send_tg(
-                            outcome + " *ETH SHORT #" + str(stats["total_trades"]) + "* [" + reason + "]\n"
-                            "Entry: $" + str(entry_price) + " -> Exit: $" + str(round(price, 2)) + "\n"
-                            "PnL: $" + str(pnl) + " | WR: " + str(wr) + "%\n"
-                            "Margin: $" + str(new_m)
-                        )
-                        position = None
-                    except Exception as e:
-                        await send_tg("ETH SHORT Close Failed: " + str(e))
+                        await order("BUY",esz,price,ro=True)
+                        pnl,nm,oc=close_trade(price,rs3,"SHORT")
+                        wr=round(st["wins"]/max(st["total_trades"],1)*100,1)
+                        await tg(oc+" *SHORT #"+str(st["total_trades"])+"* ["+rs3+"]\n$"+str(ep)+"->$"+str(round(price,2))+"\nPnL:$"+str(pnl)+" WR:"+str(wr)+"%\nMargin:$"+str(nm))
+                        pos=None
+                    except Exception as e: await tg("SHORT Close Failed:"+str(e))
 
         except Exception as e:
-            logger.error("Loop error: %s", e)
-            await send_tg("Loop error: " + str(e))
+            logger.error("Loop:%s",e); await tg("Error:"+str(e))
+        await asyncio.sleep(INTERVAL)
 
-        await asyncio.sleep(CHECK_INTERVAL)
+async def cmd_start(u,c):
+    await u.message.reply_text("*ALMA Bot*\n/status /signal /stats /history /balance /backtest",parse_mode="Markdown")
 
-async def cmd_start(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    await u.message.reply_text(
-        "*ALMA Long+Short Bot*\n"
-        "Commands:\n"
-        "/status  - Price, ADX, position\n"
-        "/signal  - Current signal\n"
-        "/stats   - Trade stats\n"
-        "/history - Last 5 trades\n"
-        "/balance - DEX balance\n"
-        "/backtest - Run backtest"
-    )
-
-async def cmd_status(u: Update, c: ContextTypes.DEFAULT_TYPE):
+async def cmd_status(u,c):
     try:
-        df     = await fetch_candles(300)
-        df     = calc_indicators(df)
-        df     = df.dropna()
-        curr   = df.iloc[-1]
-        price  = curr["close"]
-        ema200 = round(curr["ema200"], 2)
-        atr    = round(curr["atr"], 2)
-        rsi    = round(curr["rsi"], 1)
-        adx    = round(curr["adx"], 1)
-        trend  = "Bull" if price > ema200 else "Bear"
-        adx_s  = "Trending" if adx > ADX_THRESHOLD else "Sideways-SKIP"
-        pos    = position if position else "Waiting"
-        extra  = ""
-        if position and entry_price > 0:
-            if position == "LONG":
-                upnl = round((price - entry_price) * entry_size, 4)
-            else:
-                upnl = round((entry_price - price) * entry_size, 4)
-            extra = "\nUnrealized: $" + str(upnl) + "\nSL: $" + str(sl_price) + " | TP: $" + str(tp_price)
+        df=await candles(300); df=indicators(df); df=df.dropna(); cu=df.iloc[-1]
+        pr=cu["close"]; e2=round(cu["e2"],2); at2=round(cu["at"],2)
+        rs2=round(cu["rs"],1); ax2=round(cu["ax"],1)
+        tr="Bull" if pr>e2 else "Bear"
+        ax_s="Trending" if ax2>ADX_T else "Sideways-SKIP"
+        ps=pos if pos else "Waiting"
+        ex=""
+        if pos and ep>0:
+            un=round((pr-ep)*esz,4) if pos=="LONG" else round((ep-pr)*esz,4)
+            ex="\nUnrealized:$"+str(un)+"\nSL:$"+str(slp)+" TP:$"+str(tpp)
         await u.message.reply_text(
-            "*ETH Status*\n"
-            "Price: $" + str(round(price, 2)) + " | " + trend + "\n"
-            "RSI: " + str(rsi) + " | ATR: $" + str(atr) + "\n"
-            "ADX: " + str(adx) + " [" + adx_s + "]\n"
-            "EMA200: $" + str(ema200) + "\n"
-            "Position: " + pos + extra + "\n"
-            "Margin: $" + str(stats["current_margin"]),
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        await u.message.reply_text("Error: " + str(e))
+            "*ETH Status*\nPrice:$"+str(round(pr,2))+" | "+tr+"\n"
+            "RSI:"+str(rs2)+" ATR:$"+str(at2)+"\n"
+            "ADX:"+str(ax2)+" ["+ax_s+"]\n"
+            "EMA200:$"+str(e2)+"\nPos:"+ps+ex+"\n"
+            "Margin:$"+str(st["current_margin"]),parse_mode="Markdown")
+    except Exception as e: await u.message.reply_text("Error:"+str(e))
 
-async def cmd_signal(u: Update, c: ContextTypes.DEFAULT_TYPE):
+async def cmd_signal(u,c):
     try:
-        df   = await fetch_candles(300)
-        df   = calc_indicators(df)
-        df   = df.dropna()
-        curr = df.iloc[-1]
-        prev = df.iloc[-2]
-        price = curr["close"]
-        rsi   = round(curr["rsi"], 1)
-        adx   = round(curr["adx"], 1)
-        atr   = curr["atr"]
-        fast  = curr["alma_fast"]
-        slow  = curr["alma_slow"]
-        bull_cross   = (fast > slow) and (prev["alma_fast"] <= prev["alma_slow"])
-        bear_cross   = (fast < slow) and (prev["alma_fast"] >= prev["alma_slow"])
-        bull_trend   = price > curr["ema200"]
-        adx_trending = adx > ADX_THRESHOLD
-        alma_dir     = "Fast>Slow" if fast > slow else "Fast<Slow"
-        trend_str    = "Bull" if bull_trend else "Bear"
-        adx_str      = "Trending" if adx_trending else "Sideways-SKIP"
-        if bull_cross and bull_trend and adx_trending:
-            sig   = "LONG NOW!"
-            extra = "\nSL: $" + str(round(price - SL_ATR_MULT * atr, 2)) + " TP: $" + str(round(price + TP_ATR_MULT * atr, 2))
-        elif bear_cross and rsi < 50 and adx_trending:
-            sig   = "SHORT NOW!"
-            extra = "\nSL: $" + str(round(price + SL_ATR_MULT * atr, 2)) + " TP: $" + str(round(price - TP_ATR_MULT * atr, 2))
-        elif bull_cross and bull_trend and n
+        df=await candles(300); df=indicators(df); df=df.dropna()
+        cu=df.iloc[-1]; pv=df.iloc[-2]
+        pr=cu["close"]; rs2=round(cu["rs"],1); ax2=round(cu["ax"],1); at2=cu["at"]
+        bc=(cu["af"]>cu["as"]) and (pv["af"]<=pv["as"])
+        ec=(cu["af"]<cu["as"]) and (pv["af"]>=pv["as"])
+        bt=pr>cu["e2"]; tr=ax2>ADX_T
+        if bc and bt and tr: sig="LONG NOW!\nSL:$"+str(round(pr-SL_M*at2,2))+" TP:$"+str(round(pr+TP_M*at2,2))
+        elif ec and rs2<50 and tr: sig="SHORT NOW!\nSL:$"+str(round(pr+SL_M*at2,2))+" TP:$"+str(round(pr-TP_M*at2,2))
+        elif bc and bt and not tr: sig="LONG blocked-ADX low"
+        elif ec and rs2<50 and not tr: sig="SHORT blocked-ADX low"
+        elif bt and cu["af"]>cu["as"]: sig="Bullish-Wait cross"
+        elif rs2<50 and cu["af"]<cu["as"]: sig="Bearish-Wait cross"
+        else: sig="No signal"
+        ax_s="Trending" if tr else "Sideways-SKIP"
+        await u.message.reply_text(
+            "*Signal*\nPrice:$"+str(round(pr,2))+" RSI:"+str(rs2)+"\n"
+            "ADX:"+str(ax2)+" ["+ax_s+"]\n"+sig,parse_mode="Markdown")
+    except Exception as e: await u.message.reply_text("Error:"+str(e))
+
+async def cmd_stats(u,c):
+    t=st["total_trades"]; wr=round(st["wins"]/max(t,1)*100,1)
+    g=round((st["current_margin"]-START_M)/START_M*100,1)
+    lt=st.get("long_trades",0); sh=st.get("short_trades",0)
+    sg="+" if g>=0 else ""
+    await u.message.reply_text(
+        "*Stats*\nTrades:"+str(t)+" (L:"+str(lt)+" S:"+str(sh)+")\n"
+        "WR:"+str(wr)+"% | "+sg+str(g)+"%\n"
+        "PnL:$"+str(round(st["total_pnl"],4))+"\n"
+        "Margin:$"+str(st["current_margin"])+" Peak:$"+str(st["peak_margin"]),
+        parse_mode="Markdown")
+
+async def cmd_history(u,c):
+    h=st.get("history",[])
+    if not h: await u.message.reply_text("No trades!"); return
+    lines=["*Last trades:*"]
+    for t2 in h[-5:]:
+        sg="+" if t2["pnl"]>=0 else ""
+        lines.append("#"+str(t2["no"])+" "+t2["side"]+" ["+t2["reason"]+"] "+sg+"$"+str(t2["pnl"])+" ->$"+str(t2["new_margin"]))
+    await u.message.reply_text("\n".join(lines),parse_mode="Markdown")
+
+async def cmd_balance(u,c):
+    try:
+        api=lighter.ApiClient(lighter.Configuration(host=URL))
+        acc=lighter.AccountApi(api); r=await acc.account(str(ACC_IDX)); await api.close()
+        col=getattr(r,"collateral","?"); upnl=getattr(r,"unrealized_pnl","?")
+        await u.message.reply_text("*Balance*\nCollateral:$"+str(col)+"\nUnrealized:$"+str(upnl),parse_mode="Markdown")
+    except Exception as e: await u.message.reply_text("Error:"+str(e))
+
+async def cmd_backtest(u,c):
+    await u.message.reply_text("Backtest running... 30-60sec")
+    try:
+        results=[]
+        for days,label in [(90,"3M"),(365,"1Y")]:
+            ac=[]; cur=int(datetime.now().timestamp()*1000)
+            st2=int((datetime.now().timestamp()-days*86400)*1000)
+            async with httpx.AsyncClient(timeout=30) as cl:
+                while cur>st2:
+                    r=await cl.get("https://www.okx.com/api/v5/market/history-candles",
+                        params={"instId":SYM,"bar":"5m","after":str(cur),"limit":"300"})
+                    cn=r.json().get("data",[])
+                    if not cn: break
+                    ac.extend(cn); cur=int(cn[-1][0])-1
+                    if len(cn)<300: break
+                    await asyncio.sleep(0.1)
+            df=pd.DataFrame(ac)[[0,2,3,4]].copy()
+            df.columns=["time","high","low","close"]
+            for col in ["high","low","close"]: df[col]=df[col].astype(float)
+            df["time"]=pd.to_datetime(df["time"].astype(int),unit="ms")
+            df=df.drop_duplicates().sort_values("time").reset_index(drop=True)
+            df=indicators(df); df=df.dropna().reset_index(drop=True)
+            m=8.0; pb=None; bep=bem=bsl=btp=0.0; tr2=[]; lx=sx=w=0
+            for i in range(1,len(df)):
+                cu=df.iloc[i]; pv=df.iloc[i-1]; pr=cu["close"]
+                if any(pd.isna(cu[x]) for x in ["af","as","at","e2","rs","ax"]): continue
+                bc=(cu["af"]>cu["as"]) and (pv["af"]<=pv["as"])
+                ec=(cu["af"]<cu["as"]) and (pv["af"]>=pv["as"])
+                bt=pr>cu["e2"]; tr3=cu["ax"]>ADX_T
+                if pb=="LONG":
+                    rs3=None
+                    if pr>=btp: rs3="TP"
+                    elif pr<=bsl: rs3="SL"
+                    elif ec: rs3="X"
+                    if rs3:
+                        pnl=(pr-bep)/bep*bem*LEV; m=max(bem+pnl,0.5)
+                        tr2.append(pnl);
+                        if pnl>0: w+=1
+                        pb=None
+                elif pb=="SHORT":
+                    rs3=None
+                    if pr<=btp: rs3="TP"
+                    elif pr>=bsl: rs3="SL"
+                    elif bc: rs3="X"
+                    if rs3:
+                        pnl=(bep-pr)/bep*bem*LEV; m=max(bem+pnl,0.5)
+                        tr2.append(pnl);
+                        if pnl>0: w+=1
+                        pb=None
+                if pb is None and m>=0.5:
+                    if bc and bt and tr3: pb="LONG"; bep=pr; bem=m; bsl=pr-SL_M*cu["at"]; btp=pr+TP_M*cu["at"]; lx+=1
+                    elif ec and cu["rs"]<50 and tr3: pb="SHORT"; bep=pr; bem=m; bsl=pr+SL_M*cu["at"]; btp=pr-TP_M*cu["at"]; sx+=1
+            tot=len(tr2); wr2=round(w/max(tot,1)*100,1); gr=round((m-8)/8*100,1)
+            sg="+" if gr>=0 else ""
+            results.append("*"+label+"*\nTrades:"+str(tot)+"(L:"+str(lx)+" S:"+str(sx)+") WR:"+str(wr2)+"%\n"+sg+str(gr)+"% $8->$"+str(round(m,2)))
+        await u.message.reply_text("*Backtest* ALMA(13/21)+ADX>20\n---\n"+"\n\n".join(results),parse_mode="Markdown")
+    except Exception as e: await u.message.reply_text("Backtest failed:"+str(e))
+
+async def main():
+    global app,sc,st
+    st=load_st()
+    sc=lighter.SignerClient(url=URL,api_private_keys={KEY_IDX:PRV_KEY},account_index=ACC_IDX)
+    app=Application.builder().token(TG_TOKEN).build()
+    for cmd,fn in [("start",cmd_start),("status",cmd_status),("signal",cmd_signal),
+                   ("stats",cmd_stats),("history",cmd_history),("balance",cmd_balance),("backtest",cmd_backtest)]:
+        app.add_handler(CommandHandler(cmd,fn))
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(drop_pending_updates=True)
+    asyncio.get_event_loop().create_task(loop_main())
+    try: await asyncio.Event().wait()
+    finally:
+        await app.updater.stop(); await app.stop(); await app.shutdown()
+
+if __name__=="__main__":
+    asyncio.run(main())
+    
