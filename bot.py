@@ -161,7 +161,7 @@ def record_close(exit_price, reason, side):
     stats["current_margin"] = new_m
     if new_m > stats["peak_margin"]:
         stats["peak_margin"] = new_m
-    result = "✅ WIN" if pnl >= 0 else "❌ LOSS"
+    result = "[OK] WIN" if pnl >= 0 else "[ERR] LOSS"
     if pnl >= 0: stats["wins"] += 1
     else:        stats["losses"] += 1
     stats["history"].append({
@@ -204,11 +204,11 @@ async def strategy_loop():
         logger.error(f"Startup check: {e}")
 
     await send_tg(
-        f"🤖 *ALMA Long+Short Bot*\n"
-        f"💰 Margin:`${stats['current_margin']}` | {position or '⚪ Wait'}\n"
-        f"📈 Long: ALMA(13/21) cross + EMA200 + ADX>20\n"
-        f"📉 Short: ALMA(13/21) cross + RSI<50 + ADX>20\n"
-        f"⚡ {LEVERAGE}x | 5min | SL:{SL_ATR_MULT}x TP:{TP_ATR_MULT}x"
+        f"[BOT] *ALMA Long+Short Bot*\n"
+        f"[$$] Margin:`${stats['current_margin']}` | {position or '[o] Wait'}\n"
+        f"[UP] Long: ALMA(13/21) cross + EMA200 + ADX>20\n"
+        f"[DN] Short: ALMA(13/21) cross + RSI<50 + ADX>20\n"
+        f"[!] {LEVERAGE}x | 5min | SL:{SL_ATR_MULT}x TP:{TP_ATR_MULT}x"
     )
 
     while True:
@@ -235,7 +235,7 @@ async def strategy_loop():
                 f"Bull={bull_trend} Trending={adx_trending} Pos={position}"
             )
 
-            # ── NO POSITION ──
+            # -- NO POSITION --
             if position is None:
                 if long_signal and stats["current_margin"] >= MIN_MARGIN:
                     margin = stats["current_margin"]
@@ -245,11 +245,11 @@ async def strategy_loop():
                     sl_pct = round((price - new_sl) / price * 100, 2)
                     tp_pct = round((new_tp - price) / price * 100, 2)
                     await send_tg(
-                        f"📈 *ETH LONG Signal!*\n"
-                        f"ALMA cross + EMA200 + ADX>{ADX_THRESHOLD:.0f} 🟢\n"
+                        f"[UP] *ETH LONG Signal!*\n"
+                        f"ALMA cross + EMA200 + ADX>{ADX_THRESHOLD:.0f} [G]\n"
                         f"Price:`${price:.2f}` RSI:`{rsi:.1f}` ADX:`{adx:.1f}`\n"
-                        f"🛡️ SL:`${new_sl}` (-{sl_pct}%)\n"
-                        f"🎯 TP:`${new_tp}` (+{tp_pct}%)\n"
+                        f"[S] SL:`${new_sl}` (-{sl_pct}%)\n"
+                        f"[*] TP:`${new_tp}` (+{tp_pct}%)\n"
                         f"Size:`{size} ETH` | Margin:`${margin}` x {LEVERAGE}x"
                     )
                     try:
@@ -268,14 +268,14 @@ async def strategy_loop():
                         stats["long_trades"]   = stats.get("long_trades", 0) + 1
                         save_stats()
                         await send_tg(
-                            f"✅ *ETH LONG Opened!*\n"
+                            f"[OK] *ETH LONG Opened!*\n"
                             f"Entry:`${price:.2f}` | Size:`{size} ETH`\n"
-                            f"🛡️ SL:`${new_sl}` | 🎯 TP:`${new_tp}`\n"
-                            f"💰 Margin:`${margin}`"
+                            f"[S] SL:`${new_sl}` | [*] TP:`${new_tp}`\n"
+                            f"[$$] Margin:`${margin}`"
                         )
                     except Exception as e:
                         position = None
-                        await send_tg(f"❌ ETH LONG Failed: `{e}`")
+                        await send_tg(f"[ERR] ETH LONG Failed: `{e}`")
 
                 elif short_signal and stats["current_margin"] >= MIN_MARGIN:
                     margin = stats["current_margin"]
@@ -285,11 +285,11 @@ async def strategy_loop():
                     sl_pct = round((new_sl - price) / price * 100, 2)
                     tp_pct = round((price - new_tp) / price * 100, 2)
                     await send_tg(
-                        f"📉 *ETH SHORT Signal!*\n"
-                        f"ALMA cross + RSI<50 + ADX>{ADX_THRESHOLD:.0f} 🔴\n"
+                        f"[DN] *ETH SHORT Signal!*\n"
+                        f"ALMA cross + RSI<50 + ADX>{ADX_THRESHOLD:.0f} [R]\n"
                         f"Price:`${price:.2f}` RSI:`{rsi:.1f}` ADX:`{adx:.1f}`\n"
-                        f"🛡️ SL:`${new_sl}` (+{sl_pct}%)\n"
-                        f"🎯 TP:`${new_tp}` (-{tp_pct}%)\n"
+                        f"[S] SL:`${new_sl}` (+{sl_pct}%)\n"
+                        f"[*] TP:`${new_tp}` (-{tp_pct}%)\n"
                         f"Size:`{size} ETH` | Margin:`${margin}` x {LEVERAGE}x"
                     )
                     try:
@@ -308,16 +308,16 @@ async def strategy_loop():
                         stats["short_trades"]  = stats.get("short_trades", 0) + 1
                         save_stats()
                         await send_tg(
-                            f"✅ *ETH SHORT Opened!*\n"
+                            f"[OK] *ETH SHORT Opened!*\n"
                             f"Entry:`${price:.2f}` | Size:`{size} ETH`\n"
-                            f"🛡️ SL:`${new_sl}` | 🎯 TP:`${new_tp}`\n"
-                            f"💰 Margin:`${margin}`"
+                            f"[S] SL:`${new_sl}` | [*] TP:`${new_tp}`\n"
+                            f"[$$] Margin:`${margin}`"
                         )
                     except Exception as e:
                         position = None
-                        await send_tg(f"❌ ETH SHORT Failed: `{e}`")
+                        await send_tg(f"[ERR] ETH SHORT Failed: `{e}`")
 
-            # ── LONG POSITION ──
+            # -- LONG POSITION --
             elif position == "LONG":
                 unrealized = round((price - entry_price) * entry_size, 4)
                 reason = None
@@ -327,7 +327,7 @@ async def strategy_loop():
                 if reason:
                     if reason in ["TP","SL"]:
                         await send_tg(
-                            f"{'🎯' if reason=='TP' else '🛑'} *ETH LONG {reason}!*\n"
+                            f"{'[*]' if reason=='TP' else '[X]'} *ETH LONG {reason}!*\n"
                             f"Price:`${price:.2f}` | Unrealized:`${unrealized:+.4f}`"
                         )
                     try:
@@ -339,12 +339,12 @@ async def strategy_loop():
                             f"{outcome} *ETH LONG #{stats['total_trades']}* [{reason}]\n"
                             f"Entry:`${entry_price:.2f}` -> Exit:`${price:.2f}`\n"
                             f"PnL:`${pnl:+.4f}` | WR:`{wr}%`\n"
-                            f"💰 Margin:`${new_m}`"
+                            f"[$$] Margin:`${new_m}`"
                         )
                     except Exception as e:
-                        await send_tg(f"❌ LONG Close Failed: `{e}`")
+                        await send_tg(f"[ERR] LONG Close Failed: `{e}`")
 
-            # ── SHORT POSITION ──
+            # -- SHORT POSITION --
             elif position == "SHORT":
                 unrealized = round((entry_price - price) * entry_size, 4)
                 reason = None
@@ -354,7 +354,7 @@ async def strategy_loop():
                 if reason:
                     if reason in ["TP","SL"]:
                         await send_tg(
-                            f"{'🎯' if reason=='TP' else '🛑'} *ETH SHORT {reason}!*\n"
+                            f"{'[*]' if reason=='TP' else '[X]'} *ETH SHORT {reason}!*\n"
                             f"Price:`${price:.2f}` | Unrealized:`${unrealized:+.4f}`"
                         )
                     try:
@@ -366,10 +366,10 @@ async def strategy_loop():
                             f"{outcome} *ETH SHORT #{stats['total_trades']}* [{reason}]\n"
                             f"Entry:`${entry_price:.2f}` -> Exit:`${price:.2f}`\n"
                             f"PnL:`${pnl:+.4f}` | WR:`{wr}%`\n"
-                            f"💰 Margin:`${new_m}`"
+                            f"[$$] Margin:`${new_m}`"
                         )
                     except Exception as e:
-                        await send_tg(f"❌ SHORT Close Failed: `{e}`")
+                        await send_tg(f"[ERR] SHORT Close Failed: `{e}`")
 
         except Exception as e:
             logger.error(f"Loop error: {e}")
@@ -378,12 +378,12 @@ async def strategy_loop():
 
 async def cmd_start(u: Update, c: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_text(
-        f"🤖 *ALMA Long+Short Bot*\n"
-        f"💰 Margin:`${stats['current_margin']}` | {position or '⚪ Wait'}\n"
-        f"📈 Long: ALMA cross + EMA200\n"
-        f"📉 Short: ALMA cross + RSI<50\n"
-        f"⚡ {LEVERAGE}x | 5min\n"
-        f"📊 3M:+289% | 1Y:+111%\n"
+        f"[BOT] *ALMA Long+Short Bot*\n"
+        f"[$$] Margin:`${stats['current_margin']}` | {position or '[o] Wait'}\n"
+        f"[UP] Long: ALMA cross + EMA200\n"
+        f"[DN] Short: ALMA cross + RSI<50\n"
+        f"[!] {LEVERAGE}x | 5min\n"
+        f"[=] 3M:+289% | 1Y:+111%\n"
         "/status /signal /stats /history /balance /backtest",
         parse_mode="Markdown")
 
@@ -398,9 +398,9 @@ async def cmd_status(u: Update, c: ContextTypes.DEFAULT_TYPE):
         atr    = round(curr["atr"], 2)
         rsi    = round(curr["rsi"], 1)
         adx    = round(curr["adx"], 1)
-        trend  = "🟢 Bull" if price > ema200 else "🔴 Bear"
-        adx_s  = f"✅ Trending" if adx > ADX_THRESHOLD else f"❌ Sideways"
-        pos    = position or "⚪ Waiting"
+        trend  = "[G] Bull" if price > ema200 else "[R] Bear"
+        adx_s  = f"[OK] Trending" if adx > ADX_THRESHOLD else f"[ERR] Sideways"
+        pos    = position or "[o] Waiting"
         extra  = ""
         if position and entry_price > 0:
             if position == "LONG":
@@ -412,16 +412,16 @@ async def cmd_status(u: Update, c: ContextTypes.DEFAULT_TYPE):
                 f"SL:`${sl_price}` | TP:`${tp_price}`"
             )
         await u.message.reply_text(
-            f"📊 *ETH Status*\n"
+            f"[=] *ETH Status*\n"
             f"Price:`${price:.2f}` | {trend}\n"
             f"RSI:`{rsi}` | ATR:`${atr}`\n"
             f"ADX:`{adx}` {adx_s}\n"
             f"EMA200:`${ema200}`\n"
             f"Position: {pos}{extra}\n"
-            f"💰 Margin:`${stats['current_margin']}`",
+            f"[$$] Margin:`${stats['current_margin']}`",
             parse_mode="Markdown")
     except Exception as e:
-        await u.message.reply_text(f"❌ {e}")
+        await u.message.reply_text(f"[ERR] {e}")
 
 async def cmd_signal(u: Update, c: ContextTypes.DEFAULT_TYPE):
     try:
@@ -453,7 +453,4 @@ async def cmd_signal(u: Update, c: ContextTypes.DEFAULT_TYPE):
         elif bear_cross and rsi < 50 and not adx_trending:
             sig   = "SHORT blocked (ADX low)"
             extra = ""
-        elif bull_trend and curr["alma_fast"] > curr["alma_slow"]:
-            sig   = "Bullish - Wait cross"
-            extra = ""
-                       
+        elif bull_trend and curr["alm
