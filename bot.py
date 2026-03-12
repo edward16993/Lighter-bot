@@ -18,8 +18,8 @@ LIGHTER_PRIVATE_KEY = os.environ["LIGHTER_PRIVATE_KEY"]
 BASE_URL       = "https://mainnet.zklighter.elliot.ai"
 LEVERAGE       = 5
 CHECK_INTERVAL = 300   # 5 min
-SL_ATR_MULT    = 1.5   # SL = 1.5x ATR
-TP_ATR_MULT    = 2.0   # TP = 2.0x ATR
+SL_ATR_MULT    = 2.0   # SL = 2x ATR
+TP_ATR_MULT    = 3.0   # TP = 3x ATR
 ATR_PERIOD     = 10
 ALMA_FAST      = 8
 ALMA_SLOW      = 15
@@ -488,13 +488,4 @@ async def main():
     while True:
         try:
             updates = await tg_app.bot.get_updates(
-                offset=offset, timeout=10, allowed_updates=["message"])
-            for update in updates:
-                offset = update.update_id + 1
-                await tg_app.process_update(update)
-        except Exception as e:
-            logger.error(f"Polling: {e}")
-        await asyncio.sleep(1)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+                offset=offset, t
