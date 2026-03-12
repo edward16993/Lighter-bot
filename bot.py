@@ -1,4 +1,4 @@
-   # -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import os, asyncio, logging, json
 import numpy as np
 from datetime import datetime
@@ -438,24 +438,22 @@ async def cmd_signal(u: Update, c: ContextTypes.DEFAULT_TYPE):
         bear_cross   = (curr["alma_fast"] < curr["alma_slow"]) and (prev["alma_fast"] >= prev["alma_slow"])
         bull_trend   = price > curr["ema200"]
         adx_trending = adx > ADX_THRESHOLD
+        alma_dir     = "Fast>Slow" if curr["alma_fast"] > curr["alma_slow"] else "Fast<Slow"
+        trend_str    = "Bull" if bull_trend else "Bear"
+        adx_str      = "Trending" if adx_trending else "Sideways-SKIP"
         if bull_cross and bull_trend and adx_trending:
-            sig   = "🚨 LONG NOW!"
-            extra = f"\nSL:`${round(price-(SL_ATR_MULT*atr),2)}` TP:`${round(price+(TP_ATR_MULT*atr),2)}`"
+            sig   = "LONG NOW!"
+            extra = f"\nSL:${round(price-(SL_ATR_MULT*atr),2)} TP:${round(price+(TP_ATR_MULT*atr),2)}"
         elif bear_cross and rsi < 50 and adx_trending:
-            sig   = "🚨 SHORT NOW!"
-            extra = f"\nSL:`${round(price+(SL_ATR_MULT*atr),2)}` TP:`${round(price-(TP_ATR_MULT*atr),2)}`"
+            sig   = "SHORT NOW!"
+            extra = f"\nSL:${round(price+(SL_ATR_MULT*atr),2)} TP:${round(price-(TP_ATR_MULT*atr),2)}"
         elif bull_cross and bull_trend and not adx_trending:
-            sig   = "⛔ LONG blocked (ADX too low)"
+            sig   = "LONG blocked (ADX low)"
             extra = ""
         elif bear_cross and rsi < 50 and not adx_trending:
-            sig   = "⛔ SHORT blocked (ADX too low)"
+            sig   = "SHORT blocked (ADX low)"
             extra = ""
         elif bull_trend and curr["alma_fast"] > curr["alma_slow"]:
-            sig   = "🟡 Bullish - Wait cross"
+            sig   = "Bullish - Wait cross"
             extra = ""
-        elif rsi < 50 and curr["alma_fast"] < curr["alma_slow"]:
-            sig   = "🟡 Bearish RSI<50 - Wait cross"
-            extra = ""
-        else:
-            sig   = "⚪ No signal"
-  
+                       
