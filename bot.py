@@ -29,7 +29,7 @@ ETH_MARKET = {
     "stats_file":   "eth_stats.json",
     "decimals":     3,
     "min_size":     0.002,
-    "start_margin": float(os.environ.get("ETH_MARGIN", "50")),
+    "start_margin": float(os.environ.get("ETH_MARGIN", "45")),
 }
 
 position     = False
