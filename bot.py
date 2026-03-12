@@ -364,22 +364,18 @@ async def cmd_backtest(u,c):
         await u.message.reply_text("*Backtest* ALMA(13/21)+ADX>20\n---\n"+"\n\n".join(results),parse_mode="Markdown")
     except Exception as e: await u.message.reply_text("Backtest failed:"+str(e))
 
+async def post_init(application):
+    asyncio.get_event_loop().create_task(loop_main())
+
 async def main():
     global app,sc,st
     st=load_st()
     sc=lighter.SignerClient(url=URL,api_private_keys={KEY_IDX:PRV_KEY},account_index=ACC_IDX)
-    app=Application.builder().token(TG_TOKEN).build()
+    app=Application.builder().token(TG_TOKEN).post_init(post_init).build()
     for cmd,fn in [("start",cmd_start),("status",cmd_status),("signal",cmd_signal),
                    ("stats",cmd_stats),("history",cmd_history),("balance",cmd_balance),("backtest",cmd_backtest)]:
         app.add_handler(CommandHandler(cmd,fn))
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling(drop_pending_updates=True)
-    asyncio.get_event_loop().create_task(loop_main())
-    try: await asyncio.Event().wait()
-    finally:
-        await app.updater.stop(); await app.stop(); await app.shutdown()
+    await app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
     asyncio.run(main())
-    
