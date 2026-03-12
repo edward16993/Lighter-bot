@@ -466,4 +466,51 @@ async def cmd_history(u: Update, c: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_balance(u: Update, c: ContextTypes.DEFAULT_TYPE):
     try:
-        async with httpx.AsyncCl
+        async with httpx.AsyncClient(timeout=15) as cl:
+            r    = await cl.get(f"{BASE_URL}/api/v1/account",
+                                params={"account_index": ACCOUNT_INDEX})
+            data = r.json()
+            col  = data.get("account", {}).get("collateral", "N/A")
+            upnl = data.get("account", {}).get("total_unrealized_pnl", "0")
+            await u.message.reply_text(
+                f"💰 *Balance*\nCollateral:`${col}`\nUnrealized:`${upnl}`",
+                parse_mode="Markdown")
+    except Exception as e:
+        await u.message.reply_text(f"❌ {e}")
+
+async def main():
+    global tg_app, signer_client, stats
+    stats = load_stats()
+    signer_client = lighter.SignerClient(
+        url=BASE_URL,
+        api_private_keys={API_KEY_INDEX: LIGHTER_PRIVATE_KEY},
+        account_index=ACCOUNT_INDEX
+    )
+    tg_app = Application.builder().token(TELEGRAM_BOT_TOKEN).updater(None).build()
+    for cmd, fn in [
+        ("start",   cmd_start),
+        ("status",  cmd_status),
+        ("signal",  cmd_signal),
+        ("stats",   cmd_stats),
+        ("history", cmd_history),
+        ("balance", cmd_balance),
+    ]:
+        tg_app.add_handler(CommandHandler(cmd, fn))
+    await tg_app.initialize()
+    await tg_app.start()
+    asyncio.create_task(strategy_loop())
+    offset = None
+    while True:
+        try:
+            updates = await tg_app.bot.get_updates(
+                offset=offset, timeout=10, allowed_updates=["message"]
+            )
+            for update in updates:
+                offset = update.update_id + 1
+                await tg_app.process_update(update)
+        except Exception as e:
+            logger.error(f"Polling: {e}")
+        await asyncio.sleep(1)
+
+if __name__ == "__main__":
+    asyncio.run(main())
