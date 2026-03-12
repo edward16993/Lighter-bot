@@ -367,7 +367,7 @@ async def cmd_backtest(u,c):
 async def post_init(application):
     asyncio.get_event_loop().create_task(loop_main())
 
-async def main():
+def main():
     global app,sc,st
     st=load_st()
     sc=lighter.SignerClient(url=URL,api_private_keys={KEY_IDX:PRV_KEY},account_index=ACC_IDX)
@@ -375,7 +375,7 @@ async def main():
     for cmd,fn in [("start",cmd_start),("status",cmd_status),("signal",cmd_signal),
                    ("stats",cmd_stats),("history",cmd_history),("balance",cmd_balance),("backtest",cmd_backtest)]:
         app.add_handler(CommandHandler(cmd,fn))
-    await app.run_polling(drop_pending_updates=True)
+    app.run_polling(drop_pending_updates=True)
 
 if __name__=="__main__":
-    asyncio.run(main())
+    main()
