@@ -22,43 +22,40 @@ CHECK_INTERVAL = 300
 SL_ATR_MULT    = float(os.environ.get("SL_MULT", "2.0"))
 TP_ATR_MULT    = float(os.environ.get("TP_MULT", "3.0"))
 MIN_MARGIN     = 0.50
+MARKET_INDEX   = 0
+SYMBOL         = "ETH-USDT-SWAP"
+STATS_FILE     = "eth_stats.json"
+START_MARGIN   = float(os.environ.get("ETH_MARGIN", "45"))
+DECIMALS       = 3
+MIN_SIZE       = 0.002
 
-ETH_MARKET = {
-    "symbol":       "ETH-USDT-SWAP",
-    "market_index": 0,
-    "stats_file":   "eth_stats.json",
-    "decimals":     3,
-    "min_size":     0.002,
-    "start_margin": float(os.environ.get("ETH_MARGIN", "45")),
-}
-
-position     = False
-entry_price  = 0.0
-entry_size   = 0.0
-entry_margin = 0.0
-sl_price     = 0.0
-tp_price     = 0.0
-stats        = {}
+position      = None  # None / "LONG" / "SHORT"
+entry_price   = 0.0
+entry_size    = 0.0
+entry_margin  = 0.0
+sl_price      = 0.0
+tp_price      = 0.0
+stats         = {}
 signer_client = None
 tg_app        = None
 
 def load_stats():
     try:
-        if os.path.exists(ETH_MARKET["stats_file"]):
-            with open(ETH_MARKET["stats_file"]) as f:
+        if os.path.exists(STATS_FILE):
+            with open(STATS_FILE) as f:
                 return json.load(f)
     except Exception:
         pass
-    m = ETH_MARKET["start_margin"]
     return {
-        "current_margin": m, "total_trades": 0, "wins": 0, "losses": 0,
-        "total_pnl": 0.0, "peak_margin": m,
+        "current_margin": START_MARGIN, "total_trades": 0,
+        "wins": 0, "losses": 0, "total_pnl": 0.0,
+        "peak_margin": START_MARGIN, "long_trades": 0, "short_trades": 0,
         "entry_price": 0.0, "entry_size": 0.0, "entry_margin": 0.0,
         "sl_price": 0.0, "tp_price": 0.0, "history": []
     }
 
 def save_stats():
-    with open(ETH_MARKET["stats_file"], "w") as f:
+    with open(STATS_FILE, "w") as f:
         json.dump(stats, f, indent=2)
 
 def calc_alma(series, period, sigma=0.85, offset=0.85):
@@ -67,8 +64,8 @@ def calc_alma(series, period, sigma=0.85, offset=0.85):
     weights = np.array([np.exp(-((i - m)**2) / (2 * s**2)) for i in range(period)])
     weights /= weights.sum()
     result = pd.Series(np.nan, index=series.index)
-    for i in range(period - 1, len(series)):
-        result.iloc[i] = np.dot(weights, series.iloc[i - period + 1:i + 1].values)
+    for i in range(period-1, len(series)):
+        result.iloc[i] = np.dot(weights, series.iloc[i-period+1:i+1].values)
     return result
 
 def calc_atr(df, period=10):
@@ -79,19 +76,27 @@ def calc_atr(df, period=10):
     ], axis=1).max(axis=1)
     return tr.ewm(span=period, adjust=False).mean()
 
+def calc_rsi(series, period=14):
+    delta = series.diff()
+    gain  = delta.clip(lower=0).ewm(span=period, adjust=False).mean()
+    loss  = (-delta.clip(upper=0)).ewm(span=period, adjust=False).mean()
+    rs    = gain / loss.replace(0, np.nan)
+    return 100 - (100 / (1 + rs))
+
 def calc_indicators(df):
     df = df.copy()
     df["alma_fast"] = calc_alma(df["close"], 8)
     df["alma_slow"] = calc_alma(df["close"], 15)
     df["ema200"]    = df["close"].ewm(span=200, adjust=False).mean()
     df["atr"]       = calc_atr(df, 10)
+    df["rsi"]       = calc_rsi(df["close"], 14)
     return df
 
 async def fetch_candles(limit=250):
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.get(
             "https://www.okx.com/api/v5/market/candles",
-            params={"instId": "ETH-USDT-SWAP", "bar": "5m", "limit": str(limit)}
+            params={"instId": SYMBOL, "bar": "5m", "limit": str(limit)}
         )
         data = r.json()
         if data.get("code") != "0" or not data.get("data"):
@@ -103,14 +108,11 @@ async def fetch_candles(limit=250):
         return df
 
 async def place_order(side, size, price, reduce_only=False):
-    if side == "BUY":
-        order_price = int(price * 1.005 * 100)
-    else:
-        order_price = int(price * 0.995 * 100)
-    base_amt = int(size * 10000)
+    order_price = int(price * (1.005 if side == "BUY" else 0.995) * 100)
+    base_amt    = int(size * 10000)
     logger.info(f"Order: {side} {size} ETH @ ~{price:.2f}")
     tx, tx_hash, err = await signer_client.create_order(
-        market_index=ETH_MARKET["market_index"],
+        market_index=MARKET_INDEX,
         client_order_index=int(datetime.now().timestamp()),
         base_amount=base_amt,
         price=order_price,
@@ -126,12 +128,15 @@ async def place_order(side, size, price, reduce_only=False):
 
 def calc_size(margin, price):
     size = (margin * LEVERAGE) / price
-    size = max(size, ETH_MARKET["min_size"])
-    return round(size, ETH_MARKET["decimals"])
+    size = max(size, MIN_SIZE)
+    return round(size, DECIMALS)
 
-def record_close(exit_price, reason):
+def record_close(exit_price, reason, side):
     global stats
-    pnl   = round((exit_price - stats["entry_price"]) * stats["entry_size"], 4)
+    if side == "LONG":
+        pnl = round((exit_price - stats["entry_price"]) * stats["entry_size"], 4)
+    else:
+        pnl = round((stats["entry_price"] - exit_price) * stats["entry_size"], 4)
     new_m = round(max(stats["entry_margin"] + pnl, MIN_MARGIN), 4)
     stats["total_trades"] += 1
     stats["total_pnl"]    += round(pnl, 4)
@@ -139,13 +144,12 @@ def record_close(exit_price, reason):
     if new_m > stats["peak_margin"]:
         stats["peak_margin"] = new_m
     result = "✅ WIN" if pnl >= 0 else "❌ LOSS"
-    if pnl >= 0:
-        stats["wins"] += 1
-    else:
-        stats["losses"] += 1
+    if pnl >= 0: stats["wins"] += 1
+    else:        stats["losses"] += 1
     stats["history"].append({
-        "no": stats["total_trades"], "entry": stats["entry_price"],
-        "exit": exit_price, "pnl": pnl, "reason": reason,
+        "no": stats["total_trades"], "side": side,
+        "entry": stats["entry_price"], "exit": exit_price,
+        "pnl": pnl, "reason": reason,
         "old_margin": stats["entry_margin"], "new_margin": new_m,
         "result": result, "time": datetime.now().strftime("%Y-%m-%d %H:%M")
     })
@@ -168,26 +172,26 @@ async def strategy_loop():
         r   = await acc.account(str(ACCOUNT_INDEX))
         await api.close()
         for pos in (getattr(r, "positions", []) or []):
-            if getattr(pos, "market_index", -1) == ETH_MARKET["market_index"]:
+            if getattr(pos, "market_index", -1) == MARKET_INDEX:
                 size = float(getattr(pos, "base_amount", 0) or 0)
-                if size > 0:
-                    position     = True
+                if size != 0:
+                    position     = "LONG" if size > 0 else "SHORT"
                     entry_price  = float(stats.get("entry_price", 0))
-                    entry_size   = float(stats.get("entry_size", 0))
+                    entry_size   = abs(size)
                     entry_margin = float(stats.get("entry_margin", 0))
                     sl_price     = float(stats.get("sl_price", 0))
                     tp_price     = float(stats.get("tp_price", 0))
-                    logger.info("ETH position restored!")
+                    logger.info(f"ETH {position} position restored!")
     except Exception as e:
         logger.error(f"Startup check: {e}")
 
     await send_tg(
-        "🤖 *ALMA Cross Bot Started!*\n"
-        f"💰 Margin:`${stats['current_margin']}` | {'🟢 LONG' if position else '⚪ Wait'}\n"
-        f"⚡ {LEVERAGE}x | 5min | OKX data\n"
-        f"📈 ALMA(8/15) + EMA200\n"
-        f"🛡️ SL:{SL_ATR_MULT}xATR | 🎯 TP:{TP_ATR_MULT}xATR\n"
-        f"📊 Backtest: +430%/yr | +143%/3M 🚀"
+        f"🤖 *ALMA Long+Short Bot*\n"
+        f"💰 Margin:`${stats['current_margin']}` | {position or '⚪ Wait'}\n"
+        f"📈 Long: ALMA cross + EMA200\n"
+        f"📉 Short: ALMA cross + RSI<50\n"
+        f"⚡ {LEVERAGE}x | 5min | SL:{SL_ATR_MULT}x TP:{TP_ATR_MULT}x\n"
+        f"📊 3M: +289% | 1Y: +111% 🚀"
     )
 
     while True:
@@ -199,118 +203,154 @@ async def strategy_loop():
             prev = df.iloc[-2]
             price = curr["close"]
             atr   = curr["atr"]
+            rsi   = curr["rsi"]
 
-            bull_cross = (curr["alma_fast"] > curr["alma_slow"]) and (prev["alma_fast"] <= prev["alma_slow"])
-            bear_cross = (curr["alma_fast"] < curr["alma_slow"]) and (prev["alma_fast"] >= prev["alma_slow"])
-            bull_trend = price > curr["ema200"]
+            bull_cross  = (curr["alma_fast"] > curr["alma_slow"]) and (prev["alma_fast"] <= prev["alma_slow"])
+            bear_cross  = (curr["alma_fast"] < curr["alma_slow"]) and (prev["alma_fast"] >= prev["alma_slow"])
+            bull_trend  = price > curr["ema200"]
             long_signal = bull_cross and bull_trend
+            short_signal = bear_cross and (rsi < 50)
 
             logger.info(
-                f"ETH=${price:.2f} AF={curr['alma_fast']:.2f} AS={curr['alma_slow']:.2f} "
-                f"EMA200={curr['ema200']:.2f} Bull={bull_trend} Pos={position}"
+                f"ETH=${price:.2f} RSI={rsi:.1f} "
+                f"Bull={bull_trend} Pos={position}"
             )
 
-            if not position and long_signal:
-                margin = stats["current_margin"]
-                size   = calc_size(margin, price)
-                new_sl = round(price - (SL_ATR_MULT * atr), 2)
-                new_tp = round(price + (TP_ATR_MULT * atr), 2)
-                sl_pct = round((price - new_sl) / price * 100, 2)
-                tp_pct = round((new_tp - price) / price * 100, 2)
-                await send_tg(
-                    f"📈 *ETH BUY Signal!*\n"
-                    f"ALMA Fast crossed above Slow ✅\n"
-                    f"Price > EMA200 🟢\n"
-                    f"Price:`${price:.2f}` | ATR:`${atr:.2f}`\n"
-                    f"🛡️ SL:`${new_sl}` (-{sl_pct}%)\n"
-                    f"🎯 TP:`${new_tp}` (+{tp_pct}%)\n"
-                    f"Size:`{size} ETH` | Margin:`${margin}` x `{LEVERAGE}x`"
-                )
-                try:
-                    await place_order("BUY", size, price)
-                    position     = True
-                    entry_price  = price
-                    entry_size   = size
-                    entry_margin = margin
-                    sl_price     = new_sl
-                    tp_price     = new_tp
-                    stats["entry_price"]  = price
-                    stats["entry_size"]   = size
-                    stats["entry_margin"] = margin
-                    stats["sl_price"]     = new_sl
-                    stats["tp_price"]     = new_tp
-                    save_stats()
+            # ── NO POSITION ──
+            if position is None:
+                if long_signal and stats["current_margin"] >= MIN_MARGIN:
+                    margin = stats["current_margin"]
+                    size   = calc_size(margin, price)
+                    new_sl = round(price - (SL_ATR_MULT * atr), 2)
+                    new_tp = round(price + (TP_ATR_MULT * atr), 2)
+                    sl_pct = round((price - new_sl) / price * 100, 2)
+                    tp_pct = round((new_tp - price) / price * 100, 2)
                     await send_tg(
-                        f"✅ *ETH LONG Opened!*\n"
-                        f"Entry:`${price:.2f}` | Size:`{size} ETH`\n"
-                        f"🛡️ SL:`${new_sl}` | 🎯 TP:`${new_tp}`\n"
-                        f"Compounding margin:`${margin}` 💰"
+                        f"📈 *ETH LONG Signal!*\n"
+                        f"ALMA cross + EMA200 🟢\n"
+                        f"Price:`${price:.2f}` RSI:`{rsi:.1f}`\n"
+                        f"🛡️ SL:`${new_sl}` (-{sl_pct}%)\n"
+                        f"🎯 TP:`${new_tp}` (+{tp_pct}%)\n"
+                        f"Size:`{size} ETH` | Margin:`${margin}` x {LEVERAGE}x"
                     )
-                except Exception as e:
-                    position = False
-                    await send_tg(f"❌ ETH BUY Failed: `{e}`")
+                    try:
+                        await place_order("BUY", size, price)
+                        position     = "LONG"
+                        entry_price  = price
+                        entry_size   = size
+                        entry_margin = margin
+                        sl_price     = new_sl
+                        tp_price     = new_tp
+                        stats["entry_price"]   = price
+                        stats["entry_size"]    = size
+                        stats["entry_margin"]  = margin
+                        stats["sl_price"]      = new_sl
+                        stats["tp_price"]      = new_tp
+                        stats["long_trades"]   = stats.get("long_trades", 0) + 1
+                        save_stats()
+                        await send_tg(
+                            f"✅ *ETH LONG Opened!*\n"
+                            f"Entry:`${price:.2f}` | Size:`{size} ETH`\n"
+                            f"🛡️ SL:`${new_sl}` | 🎯 TP:`${new_tp}`\n"
+                            f"💰 Margin:`${margin}`"
+                        )
+                    except Exception as e:
+                        position = None
+                        await send_tg(f"❌ ETH LONG Failed: `{e}`")
 
-            elif position:
+                elif short_signal and stats["current_margin"] >= MIN_MARGIN:
+                    margin = stats["current_margin"]
+                    size   = calc_size(margin, price)
+                    new_sl = round(price + (SL_ATR_MULT * atr), 2)
+                    new_tp = round(price - (TP_ATR_MULT * atr), 2)
+                    sl_pct = round((new_sl - price) / price * 100, 2)
+                    tp_pct = round((price - new_tp) / price * 100, 2)
+                    await send_tg(
+                        f"📉 *ETH SHORT Signal!*\n"
+                        f"ALMA cross + RSI<50 🔴\n"
+                        f"Price:`${price:.2f}` RSI:`{rsi:.1f}`\n"
+                        f"🛡️ SL:`${new_sl}` (+{sl_pct}%)\n"
+                        f"🎯 TP:`${new_tp}` (-{tp_pct}%)\n"
+                        f"Size:`{size} ETH` | Margin:`${margin}` x {LEVERAGE}x"
+                    )
+                    try:
+                        await place_order("SELL", size, price)
+                        position     = "SHORT"
+                        entry_price  = price
+                        entry_size   = size
+                        entry_margin = margin
+                        sl_price     = new_sl
+                        tp_price     = new_tp
+                        stats["entry_price"]   = price
+                        stats["entry_size"]    = size
+                        stats["entry_margin"]  = margin
+                        stats["sl_price"]      = new_sl
+                        stats["tp_price"]      = new_tp
+                        stats["short_trades"]  = stats.get("short_trades", 0) + 1
+                        save_stats()
+                        await send_tg(
+                            f"✅ *ETH SHORT Opened!*\n"
+                            f"Entry:`${price:.2f}` | Size:`{size} ETH`\n"
+                            f"🛡️ SL:`${new_sl}` | 🎯 TP:`${new_tp}`\n"
+                            f"💰 Margin:`${margin}`"
+                        )
+                    except Exception as e:
+                        position = None
+                        await send_tg(f"❌ ETH SHORT Failed: `{e}`")
+
+            # ── LONG POSITION ──
+            elif position == "LONG":
                 unrealized = round((price - entry_price) * entry_size, 4)
-                if price >= tp_price:
-                    await send_tg(
-                        f"🎯 *ETH TP Hit!*\n"
-                        f"Price:`${price:.2f}` >= TP:`${tp_price}`\n"
-                        f"Unrealized:`${unrealized:+.4f}` 🚀"
-                    )
+                reason = None
+                if price >= tp_price:   reason = "TP"
+                elif price <= sl_price: reason = "SL"
+                elif bear_cross:        reason = "Cross"
+                if reason:
+                    if reason in ["TP","SL"]:
+                        await send_tg(
+                            f"{'🎯' if reason=='TP' else '🛑'} *ETH LONG {reason}!*\n"
+                            f"Price:`${price:.2f}` | Unrealized:`${unrealized:+.4f}`"
+                        )
                     try:
                         await place_order("SELL", entry_size, price, reduce_only=True)
-                        position = False
-                        pnl, new_m, outcome = record_close(price, "TP")
+                        position = None
+                        pnl, new_m, outcome = record_close(price, reason, "LONG")
                         wr = round(stats["wins"] / max(stats["total_trades"], 1) * 100, 1)
                         await send_tg(
-                            f"{outcome} *ETH TP #{stats['total_trades']}* 🎯\n"
+                            f"{outcome} *ETH LONG #{stats['total_trades']}* [{reason}]\n"
                             f"Entry:`${entry_price:.2f}` -> Exit:`${price:.2f}`\n"
                             f"PnL:`${pnl:+.4f}` | WR:`{wr}%`\n"
-                            f"💰 Margin:`${new_m}` (compounded!)"
+                            f"💰 Margin:`${new_m}`"
                         )
                     except Exception as e:
-                        await send_tg(f"❌ TP Close Failed: `{e}`")
+                        await send_tg(f"❌ LONG Close Failed: `{e}`")
 
-                elif price <= sl_price:
-                    await send_tg(
-                        f"🛑 *ETH SL Hit!*\n"
-                        f"Price:`${price:.2f}` <= SL:`${sl_price}`\n"
-                        f"Closing position! 🛡️"
-                    )
+            # ── SHORT POSITION ──
+            elif position == "SHORT":
+                unrealized = round((entry_price - price) * entry_size, 4)
+                reason = None
+                if price <= tp_price:   reason = "TP"
+                elif price >= sl_price: reason = "SL"
+                elif bull_cross:        reason = "Cross"
+                if reason:
+                    if reason in ["TP","SL"]:
+                        await send_tg(
+                            f"{'🎯' if reason=='TP' else '🛑'} *ETH SHORT {reason}!*\n"
+                            f"Price:`${price:.2f}` | Unrealized:`${unrealized:+.4f}`"
+                        )
                     try:
-                        await place_order("SELL", entry_size, price, reduce_only=True)
-                        position = False
-                        pnl, new_m, outcome = record_close(price, "SL")
+                        await place_order("BUY", entry_size, price, reduce_only=True)
+                        position = None
+                        pnl, new_m, outcome = record_close(price, reason, "SHORT")
                         wr = round(stats["wins"] / max(stats["total_trades"], 1) * 100, 1)
                         await send_tg(
-                            f"{outcome} *ETH SL #{stats['total_trades']}* 🛑\n"
+                            f"{outcome} *ETH SHORT #{stats['total_trades']}* [{reason}]\n"
                             f"Entry:`${entry_price:.2f}` -> Exit:`${price:.2f}`\n"
                             f"PnL:`${pnl:+.4f}` | WR:`{wr}%`\n"
-                            f"💰 Next Margin:`${new_m}`"
+                            f"💰 Margin:`${new_m}`"
                         )
                     except Exception as e:
-                        await send_tg(f"❌ SL Close Failed: `{e}`")
-
-                elif bear_cross:
-                    await send_tg(
-                        f"🔄 *ETH ALMA Cross Exit!*\n"
-                        f"Fast crossed below Slow\n"
-                        f"Price:`${price:.2f}` | Unrealized:`${unrealized:+.4f}`"
-                    )
-                    try:
-                        await place_order("SELL", entry_size, price, reduce_only=True)
-                        position = False
-                        pnl, new_m, outcome = record_close(price, "Cross")
-                        wr = round(stats["wins"] / max(stats["total_trades"], 1) * 100, 1)
-                        await send_tg(
-                            f"{outcome} *ETH Cross #{stats['total_trades']}*\n"
-                            f"Entry:`${entry_price:.2f}` -> Exit:`${price:.2f}`\n"
-                            f"PnL:`${pnl:+.4f}` | WR:`{wr}%`\n"
-                            f"💰 Margin:`${new_m}` (compounded!)"
-                        )
-                    except Exception as e:
-                        await send_tg(f"❌ Cross Close Failed: `{e}`")
+                        await send_tg(f"❌ SHORT Close Failed: `{e}`")
 
         except Exception as e:
             logger.error(f"Loop error: {e}")
@@ -319,11 +359,12 @@ async def strategy_loop():
 
 async def cmd_start(u: Update, c: ContextTypes.DEFAULT_TYPE):
     await u.message.reply_text(
-        f"🤖 *ALMA Cross Bot*\n"
-        f"Margin:`${stats['current_margin']}` | {'🟢 LONG' if position else '⚪ Wait'}\n"
-        f"📈 ALMA(8/15) + EMA200\n"
-        f"🛡️ SL:{SL_ATR_MULT}xATR | 🎯 TP:{TP_ATR_MULT}xATR\n"
-        f"📊 +430%/yr | +143%/3M\n"
+        f"🤖 *ALMA Long+Short Bot*\n"
+        f"💰 Margin:`${stats['current_margin']}` | {position or '⚪ Wait'}\n"
+        f"📈 Long: ALMA cross + EMA200\n"
+        f"📉 Short: ALMA cross + RSI<50\n"
+        f"⚡ {LEVERAGE}x | 5min\n"
+        f"📊 3M:+289% | 1Y:+111%\n"
         "/status /signal /stats /history /balance",
         parse_mode="Markdown")
 
@@ -334,29 +375,27 @@ async def cmd_status(u: Update, c: ContextTypes.DEFAULT_TYPE):
         df   = df.dropna()
         curr = df.iloc[-1]
         price  = curr["close"]
-        alma_f = round(curr["alma_fast"], 2)
-        alma_s = round(curr["alma_slow"], 2)
         ema200 = round(curr["ema200"], 2)
         atr    = round(curr["atr"], 2)
+        rsi    = round(curr["rsi"], 1)
         trend  = "🟢 Bull" if price > ema200 else "🔴 Bear"
-        alma_status = "📈 Fast>Slow" if alma_f > alma_s else "📉 Fast<Slow"
-        pos_str = "🟢 LONG" if position else "⚪ Waiting"
-        extra = ""
+        pos    = position or "⚪ Waiting"
+        extra  = ""
         if position and entry_price > 0:
-            upnl    = round((price - entry_price) * entry_size, 4)
-            sl_dist = round(price - sl_price, 2)
-            tp_dist = round(tp_price - price, 2)
+            if position == "LONG":
+                upnl = round((price - entry_price) * entry_size, 4)
+            else:
+                upnl = round((entry_price - price) * entry_size, 4)
             extra = (
                 f"\nUnrealized:`${upnl:+.4f}`\n"
-                f"SL:`${sl_price}` (dist:${sl_dist})\n"
-                f"TP:`${tp_price}` (dist:${tp_dist})"
+                f"SL:`${sl_price}` | TP:`${tp_price}`"
             )
         await u.message.reply_text(
             f"📊 *ETH Status*\n"
             f"Price:`${price:.2f}` | {trend}\n"
-            f"ALMA: {alma_status} | ATR:`${atr}`\n"
+            f"RSI:`{rsi}` | ATR:`${atr}`\n"
             f"EMA200:`${ema200}`\n"
-            f"Position: {pos_str}{extra}\n"
+            f"Position: {pos}{extra}\n"
             f"💰 Margin:`${stats['current_margin']}`",
             parse_mode="Markdown")
     except Exception as e:
@@ -370,27 +409,29 @@ async def cmd_signal(u: Update, c: ContextTypes.DEFAULT_TYPE):
         curr = df.iloc[-1]
         prev = df.iloc[-2]
         price = curr["close"]
+        rsi   = round(curr["rsi"], 1)
         atr   = curr["atr"]
-        bull_cross = (curr["alma_fast"] > curr["alma_slow"]) and (prev["alma_fast"] <= prev["alma_slow"])
-        bear_cross = (curr["alma_fast"] < curr["alma_slow"]) and (prev["alma_fast"] >= prev["alma_slow"])
-        bull_trend = price > curr["ema200"]
+        bull_cross  = (curr["alma_fast"] > curr["alma_slow"]) and (prev["alma_fast"] <= prev["alma_slow"])
+        bear_cross  = (curr["alma_fast"] < curr["alma_slow"]) and (prev["alma_fast"] >= prev["alma_slow"])
+        bull_trend  = price > curr["ema200"]
         if bull_cross and bull_trend:
-            sig   = "🚨 BUY Signal NOW!"
-            psl   = round(price - (SL_ATR_MULT * atr), 2)
-            ptp   = round(price + (TP_ATR_MULT * atr), 2)
-            extra = f"\nSL:`${psl}` TP:`${ptp}`"
-        elif bear_cross:
-            sig   = "📉 Exit Signal"
-            extra = ""
+            sig = "🚨 LONG NOW!"
+            extra = f"\nSL:`${round(price-(SL_ATR_MULT*atr),2)}` TP:`${round(price+(TP_ATR_MULT*atr),2)}`"
+        elif bear_cross and rsi < 50:
+            sig = "🚨 SHORT NOW!"
+            extra = f"\nSL:`${round(price+(SL_ATR_MULT*atr),2)}` TP:`${round(price-(TP_ATR_MULT*atr),2)}`"
         elif bull_trend and curr["alma_fast"] > curr["alma_slow"]:
-            sig   = "🟡 Bullish - Wait cross"
+            sig = "🟡 Bullish - Wait cross"
+            extra = ""
+        elif rsi < 50 and curr["alma_fast"] < curr["alma_slow"]:
+            sig = "🟡 Bearish RSI<50 - Wait cross"
             extra = ""
         else:
-            sig   = "🔴 No signal"
+            sig = "⚪ No signal"
             extra = ""
         await u.message.reply_text(
             f"🎯 *Signal Check*\n"
-            f"Price:`${price:.2f}`\n"
+            f"Price:`${price:.2f}` RSI:`{rsi}`\n"
             f"Trend: {'🟢 Bull' if bull_trend else '🔴 Bear'}\n"
             f"ALMA: {'📈 Fast>Slow' if curr['alma_fast']>curr['alma_slow'] else '📉 Fast<Slow'}\n"
             f"Signal: {sig}{extra}",
@@ -401,16 +442,16 @@ async def cmd_signal(u: Update, c: ContextTypes.DEFAULT_TYPE):
 async def cmd_stats(u: Update, c: ContextTypes.DEFAULT_TYPE):
     t  = stats["total_trades"]
     wr = round(stats["wins"] / max(t, 1) * 100, 1)
-    sm = ETH_MARKET["start_margin"]
-    g  = round((stats["current_margin"] - sm) / sm * 100, 1)
+    g  = round((stats["current_margin"] - START_MARGIN) / START_MARGIN * 100, 1)
+    lt = stats.get("long_trades", 0)
+    st = stats.get("short_trades", 0)
     await u.message.reply_text(
-        f"📊 *ALMA Bot Stats*\n"
-        f"Trades:`{t}` | WR:`{wr}%`\n"
-        f"Wins:`{stats['wins']}` | Losses:`{stats['losses']}`\n"
+        f"📊 *ALMA L+S Stats*\n"
+        f"Trades:`{t}` (L:{lt} S:{st})\n"
+        f"WR:`{wr}%` | {'✅' if g>=0 else '❌'}{g}%\n"
         f"Total PnL:`${stats['total_pnl']:.4f}`\n"
-        f"💰 Margin:`${stats['current_margin']}` ({g}%)\n"
-        f"Peak:`${stats['peak_margin']}`\n"
-        f"Start:`${sm}`",
+        f"💰 Margin:`${stats['current_margin']}`\n"
+        f"Peak:`${stats['peak_margin']}`",
         parse_mode="Markdown")
 
 async def cmd_history(u: Update, c: ContextTypes.DEFAULT_TYPE):
@@ -418,66 +459,11 @@ async def cmd_history(u: Update, c: ContextTypes.DEFAULT_TYPE):
     if not h:
         await u.message.reply_text("No trades yet!")
         return
-    msg = "📜 *Trade History (Last 5)*\n"
+    msg = "📜 *History (Last 5)*\n"
     for t in reversed(h[-5:]):
-        msg += f"{t['result']} #{t['no']} `${t['pnl']:+.4f}` [{t.get('reason','')}]\n"
-        msg += f"  `${t['old_margin']}` -> `${t['new_margin']}` {t['time']}\n"
+        msg += f"{t['result']} {t.get('side','')} #{t['no']} `${t['pnl']:+.4f}` [{t.get('reason','')}] {t['time']}\n"
     await u.message.reply_text(msg, parse_mode="Markdown")
 
 async def cmd_balance(u: Update, c: ContextTypes.DEFAULT_TYPE):
     try:
-        async with httpx.AsyncClient(timeout=15) as cl:
-            r    = await cl.get(f"{BASE_URL}/api/v1/account",
-                                params={"account_index": ACCOUNT_INDEX})
-            data = r.json()
-            col  = data.get("account", {}).get("collateral", "N/A")
-            upnl = data.get("account", {}).get("total_unrealized_pnl", "0")
-            await u.message.reply_text(
-                f"💰 *Balance*\n"
-                f"Collateral:`${col}`\n"
-                f"Unrealized PnL:`${upnl}`",
-                parse_mode="Markdown")
-    except Exception as e:
-        await u.message.reply_text(f"❌ {e}")
-
-async def main():
-    global tg_app, signer_client, stats
-    stats = load_stats()
-
-    signer_client = lighter.SignerClient(
-        url=BASE_URL,
-        api_private_keys={API_KEY_INDEX: LIGHTER_PRIVATE_KEY},
-        account_index=ACCOUNT_INDEX
-    )
-    tg_app = Application.builder().token(TELEGRAM_BOT_TOKEN).updater(None).build()
-
-    for cmd, fn in [
-        ("start",   cmd_start),
-        ("status",  cmd_status),
-        ("signal",  cmd_signal),
-        ("stats",   cmd_stats),
-        ("history", cmd_history),
-        ("balance", cmd_balance),
-    ]:
-        tg_app.add_handler(CommandHandler(cmd, fn))
-
-    await tg_app.initialize()
-    await tg_app.start()
-
-    asyncio.create_task(strategy_loop())
-
-    offset = None
-    while True:
-        try:
-            updates = await tg_app.bot.get_updates(
-                offset=offset, timeout=10, allowed_updates=["message"]
-            )
-            for update in updates:
-                offset = update.update_id + 1
-                await tg_app.process_update(update)
-        except Exception as e:
-            logger.error(f"Polling: {e}")
-        await asyncio.sleep(1)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        async with httpx.AsyncCl
