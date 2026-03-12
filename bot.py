@@ -18,8 +18,8 @@ LIGHTER_PRIVATE_KEY = os.environ["LIGHTER_PRIVATE_KEY"]
 BASE_URL       = "https://mainnet.zklighter.elliot.ai"
 LEVERAGE       = 5
 CHECK_INTERVAL = 300   # 5 min
-SL_ATR_MULT    = 2.0   # SL = 2x ATR
-TP_ATR_MULT    = 3.0   # TP = 3x ATR
+SL_ATR_MULT    = float(os.environ.get("SL_MULT", "2.0"))
+TP_ATR_MULT    = float(os.environ.get("TP_MULT", "3.0"))
 ATR_PERIOD     = 10
 ALMA_FAST      = 8
 ALMA_SLOW      = 15
@@ -487,5 +487,4 @@ async def main():
     offset = None
     while True:
         try:
-            updates = await tg_app.bot.get_updates(
-                offset=offset, t
+            updates = await tg_app.bot.get_u
