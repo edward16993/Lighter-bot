@@ -438,24 +438,24 @@ async def cmd_signal(u: Update, c: ContextTypes.DEFAULT_TYPE):
         bull_trend   = price > curr["ema200"]
         adx_trending = adx > ADX_THRESHOLD
         if bull_cross and bull_trend and adx_trending:
-            sig = "🚨 LONG NOW!"
+            sig   = "🚨 LONG NOW!"
             extra = f"\nSL:`${round(price-(SL_ATR_MULT*atr),2)}` TP:`${round(price+(TP_ATR_MULT*atr),2)}`"
         elif bear_cross and rsi < 50 and adx_trending:
-            sig = "🚨 SHORT NOW!"
+            sig   = "🚨 SHORT NOW!"
             extra = f"\nSL:`${round(price+(SL_ATR_MULT*atr),2)}` TP:`${round(price-(TP_ATR_MULT*atr),2)}`"
         elif bull_cross and bull_trend and not adx_trending:
-            sig = "⛔ LONG blocked (ADX too low)"
+            sig   = "⛔ LONG blocked (ADX too low)"
             extra = ""
         elif bear_cross and rsi < 50 and not adx_trending:
-            sig = "⛔ SHORT blocked (ADX too low)"
+            sig   = "⛔ SHORT blocked (ADX too low)"
             extra = ""
         elif bull_trend and curr["alma_fast"] > curr["alma_slow"]:
-            sig = "🟡 Bullish - Wait cross"
+            sig   = "🟡 Bullish - Wait cross"
             extra = ""
         elif rsi < 50 and curr["alma_fast"] < curr["alma_slow"]:
-            sig = "🟡 Bearish RSI<50 - Wait cross"
+            sig   = "🟡 Bearish RSI<50 - Wait cross"
             extra = ""
         else:
-            sig = "⚪ No signal"
+            sig   = "⚪ No signal"
             extra = ""
-        adx_icon 
+   
