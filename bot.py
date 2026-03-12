@@ -21,11 +21,12 @@ LEVERAGE       = 5
 CHECK_INTERVAL = 300
 SL_ATR_MULT    = float(os.environ.get("SL_MULT", "2.0"))
 TP_ATR_MULT    = float(os.environ.get("TP_MULT", "3.0"))
+ADX_THRESHOLD  = 20.0   # ADX>20 = Trending = Trade!
 MIN_MARGIN     = 0.50
 MARKET_INDEX   = 0
 SYMBOL         = "ETH-USDT-SWAP"
 STATS_FILE     = "eth_stats.json"
-START_MARGIN   = float(os.environ.get("ETH_MARGIN", "45"))
+START_MARGIN   = float(os.environ.get("ETH_MARGIN", "50"))
 DECIMALS       = 3
 MIN_SIZE       = 0.002
 
@@ -76,6 +77,21 @@ def calc_atr(df, period=10):
     ], axis=1).max(axis=1)
     return tr.ewm(span=period, adjust=False).mean()
 
+def calc_adx(df, period=14):
+    tr    = pd.concat([
+        df["high"] - df["low"],
+        (df["high"] - df["close"].shift()).abs(),
+        (df["low"]  - df["close"].shift()).abs()
+    ], axis=1).max(axis=1).ewm(span=period, adjust=False).mean()
+    dm_p  = (df["high"].diff()).clip(lower=0)
+    dm_m  = (-df["low"].diff()).clip(lower=0)
+    dm_p  = dm_p.where(dm_p > dm_m, 0)
+    dm_m  = dm_m.where(dm_m > dm_p, 0)
+    di_p  = 100 * dm_p.ewm(span=period, adjust=False).mean() / tr.replace(0, np.nan)
+    di_m  = 100 * dm_m.ewm(span=period, adjust=False).mean() / tr.replace(0, np.nan)
+    dx    = 100 * (di_p - di_m).abs() / (di_p + di_m).replace(0, np.nan)
+    return dx.ewm(span=period, adjust=False).mean()
+
 def calc_rsi(series, period=14):
     delta = series.diff()
     gain  = delta.clip(lower=0).ewm(span=period, adjust=False).mean()
@@ -85,11 +101,12 @@ def calc_rsi(series, period=14):
 
 def calc_indicators(df):
     df = df.copy()
-    df["alma_fast"] = calc_alma(df["close"], 8)
-    df["alma_slow"] = calc_alma(df["close"], 15)
+    df["alma_fast"] = calc_alma(df["close"], 13)
+    df["alma_slow"] = calc_alma(df["close"], 21)
     df["ema200"]    = df["close"].ewm(span=200, adjust=False).mean()
     df["atr"]       = calc_atr(df, 10)
     df["rsi"]       = calc_rsi(df["close"], 14)
+    df["adx"]       = calc_adx(df, 14)
     return df
 
 async def fetch_candles(limit=250):
@@ -188,15 +205,14 @@ async def strategy_loop():
     await send_tg(
         f"🤖 *ALMA Long+Short Bot*\n"
         f"💰 Margin:`${stats['current_margin']}` | {position or '⚪ Wait'}\n"
-        f"📈 Long: ALMA cross + EMA200\n"
-        f"📉 Short: ALMA cross + RSI<50\n"
-        f"⚡ {LEVERAGE}x | 5min | SL:{SL_ATR_MULT}x TP:{TP_ATR_MULT}x\n"
-        f"📊 3M: +289% | 1Y: +111% 🚀"
+        f"📈 Long: ALMA(13/21) cross + EMA200 + ADX>20\n"
+        f"📉 Short: ALMA(13/21) cross + RSI<50 + ADX>20\n"
+        f"⚡ {LEVERAGE}x | 5min | SL:{SL_ATR_MULT}x TP:{TP_ATR_MULT}x"
     )
 
     while True:
         try:
-            df   = await fetch_candles(250)
+            df   = await fetch_candles(300)
             df   = calc_indicators(df)
             df   = df.dropna()
             curr = df.iloc[-1]
@@ -204,16 +220,18 @@ async def strategy_loop():
             price = curr["close"]
             atr   = curr["atr"]
             rsi   = curr["rsi"]
+            adx   = curr["adx"]
 
-            bull_cross  = (curr["alma_fast"] > curr["alma_slow"]) and (prev["alma_fast"] <= prev["alma_slow"])
-            bear_cross  = (curr["alma_fast"] < curr["alma_slow"]) and (prev["alma_fast"] >= prev["alma_slow"])
-            bull_trend  = price > curr["ema200"]
-            long_signal = bull_cross and bull_trend
-            short_signal = bear_cross and (rsi < 50)
+            bull_cross   = (curr["alma_fast"] > curr["alma_slow"]) and (prev["alma_fast"] <= prev["alma_slow"])
+            bear_cross   = (curr["alma_fast"] < curr["alma_slow"]) and (prev["alma_fast"] >= prev["alma_slow"])
+            bull_trend   = price > curr["ema200"]
+            adx_trending = adx > ADX_THRESHOLD
+            long_signal  = bull_cross and bull_trend and adx_trending
+            short_signal = bear_cross and (rsi < 50) and adx_trending
 
             logger.info(
-                f"ETH=${price:.2f} RSI={rsi:.1f} "
-                f"Bull={bull_trend} Pos={position}"
+                f"ETH=${price:.2f} RSI={rsi:.1f} ADX={adx:.1f} "
+                f"Bull={bull_trend} Trending={adx_trending} Pos={position}"
             )
 
             # ── NO POSITION ──
@@ -227,8 +245,8 @@ async def strategy_loop():
                     tp_pct = round((new_tp - price) / price * 100, 2)
                     await send_tg(
                         f"📈 *ETH LONG Signal!*\n"
-                        f"ALMA cross + EMA200 🟢\n"
-                        f"Price:`${price:.2f}` RSI:`{rsi:.1f}`\n"
+                        f"ALMA cross + EMA200 + ADX>{ADX_THRESHOLD:.0f} 🟢\n"
+                        f"Price:`${price:.2f}` RSI:`{rsi:.1f}` ADX:`{adx:.1f}`\n"
                         f"🛡️ SL:`${new_sl}` (-{sl_pct}%)\n"
                         f"🎯 TP:`${new_tp}` (+{tp_pct}%)\n"
                         f"Size:`{size} ETH` | Margin:`${margin}` x {LEVERAGE}x"
@@ -267,8 +285,8 @@ async def strategy_loop():
                     tp_pct = round((price - new_tp) / price * 100, 2)
                     await send_tg(
                         f"📉 *ETH SHORT Signal!*\n"
-                        f"ALMA cross + RSI<50 🔴\n"
-                        f"Price:`${price:.2f}` RSI:`{rsi:.1f}`\n"
+                        f"ALMA cross + RSI<50 + ADX>{ADX_THRESHOLD:.0f} 🔴\n"
+                        f"Price:`${price:.2f}` RSI:`{rsi:.1f}` ADX:`{adx:.1f}`\n"
                         f"🛡️ SL:`${new_sl}` (+{sl_pct}%)\n"
                         f"🎯 TP:`${new_tp}` (-{tp_pct}%)\n"
                         f"Size:`{size} ETH` | Margin:`${margin}` x {LEVERAGE}x"
@@ -365,12 +383,12 @@ async def cmd_start(u: Update, c: ContextTypes.DEFAULT_TYPE):
         f"📉 Short: ALMA cross + RSI<50\n"
         f"⚡ {LEVERAGE}x | 5min\n"
         f"📊 3M:+289% | 1Y:+111%\n"
-        "/status /signal /stats /history /balance",
+        "/status /signal /stats /history /balance /backtest",
         parse_mode="Markdown")
 
 async def cmd_status(u: Update, c: ContextTypes.DEFAULT_TYPE):
     try:
-        df   = await fetch_candles(250)
+        df   = await fetch_candles(300)
         df   = calc_indicators(df)
         df   = df.dropna()
         curr = df.iloc[-1]
@@ -378,7 +396,9 @@ async def cmd_status(u: Update, c: ContextTypes.DEFAULT_TYPE):
         ema200 = round(curr["ema200"], 2)
         atr    = round(curr["atr"], 2)
         rsi    = round(curr["rsi"], 1)
+        adx    = round(curr["adx"], 1)
         trend  = "🟢 Bull" if price > ema200 else "🔴 Bear"
+        adx_s  = f"✅ Trending" if adx > ADX_THRESHOLD else f"❌ Sideways"
         pos    = position or "⚪ Waiting"
         extra  = ""
         if position and entry_price > 0:
@@ -394,6 +414,7 @@ async def cmd_status(u: Update, c: ContextTypes.DEFAULT_TYPE):
             f"📊 *ETH Status*\n"
             f"Price:`${price:.2f}` | {trend}\n"
             f"RSI:`{rsi}` | ATR:`${atr}`\n"
+            f"ADX:`{adx}` {adx_s}\n"
             f"EMA200:`${ema200}`\n"
             f"Position: {pos}{extra}\n"
             f"💰 Margin:`${stats['current_margin']}`",
@@ -403,23 +424,31 @@ async def cmd_status(u: Update, c: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_signal(u: Update, c: ContextTypes.DEFAULT_TYPE):
     try:
-        df   = await fetch_candles(250)
+        df   = await fetch_candles(300)
         df   = calc_indicators(df)
         df   = df.dropna()
         curr = df.iloc[-1]
         prev = df.iloc[-2]
         price = curr["close"]
         rsi   = round(curr["rsi"], 1)
+        adx   = round(curr["adx"], 1)
         atr   = curr["atr"]
-        bull_cross  = (curr["alma_fast"] > curr["alma_slow"]) and (prev["alma_fast"] <= prev["alma_slow"])
-        bear_cross  = (curr["alma_fast"] < curr["alma_slow"]) and (prev["alma_fast"] >= prev["alma_slow"])
-        bull_trend  = price > curr["ema200"]
-        if bull_cross and bull_trend:
+        bull_cross   = (curr["alma_fast"] > curr["alma_slow"]) and (prev["alma_fast"] <= prev["alma_slow"])
+        bear_cross   = (curr["alma_fast"] < curr["alma_slow"]) and (prev["alma_fast"] >= prev["alma_slow"])
+        bull_trend   = price > curr["ema200"]
+        adx_trending = adx > ADX_THRESHOLD
+        if bull_cross and bull_trend and adx_trending:
             sig = "🚨 LONG NOW!"
             extra = f"\nSL:`${round(price-(SL_ATR_MULT*atr),2)}` TP:`${round(price+(TP_ATR_MULT*atr),2)}`"
-        elif bear_cross and rsi < 50:
+        elif bear_cross and rsi < 50 and adx_trending:
             sig = "🚨 SHORT NOW!"
             extra = f"\nSL:`${round(price+(SL_ATR_MULT*atr),2)}` TP:`${round(price-(TP_ATR_MULT*atr),2)}`"
+        elif bull_cross and bull_trend and not adx_trending:
+            sig = "⛔ LONG blocked (ADX too low)"
+            extra = ""
+        elif bear_cross and rsi < 50 and not adx_trending:
+            sig = "⛔ SHORT blocked (ADX too low)"
+            extra = ""
         elif bull_trend and curr["alma_fast"] > curr["alma_slow"]:
             sig = "🟡 Bullish - Wait cross"
             extra = ""
@@ -429,88 +458,4 @@ async def cmd_signal(u: Update, c: ContextTypes.DEFAULT_TYPE):
         else:
             sig = "⚪ No signal"
             extra = ""
-        await u.message.reply_text(
-            f"🎯 *Signal Check*\n"
-            f"Price:`${price:.2f}` RSI:`{rsi}`\n"
-            f"Trend: {'🟢 Bull' if bull_trend else '🔴 Bear'}\n"
-            f"ALMA: {'📈 Fast>Slow' if curr['alma_fast']>curr['alma_slow'] else '📉 Fast<Slow'}\n"
-            f"Signal: {sig}{extra}",
-            parse_mode="Markdown")
-    except Exception as e:
-        await u.message.reply_text(f"❌ {e}")
-
-async def cmd_stats(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    t  = stats["total_trades"]
-    wr = round(stats["wins"] / max(t, 1) * 100, 1)
-    g  = round((stats["current_margin"] - START_MARGIN) / START_MARGIN * 100, 1)
-    lt = stats.get("long_trades", 0)
-    st = stats.get("short_trades", 0)
-    await u.message.reply_text(
-        f"📊 *ALMA L+S Stats*\n"
-        f"Trades:`{t}` (L:{lt} S:{st})\n"
-        f"WR:`{wr}%` | {'✅' if g>=0 else '❌'}{g}%\n"
-        f"Total PnL:`${stats['total_pnl']:.4f}`\n"
-        f"💰 Margin:`${stats['current_margin']}`\n"
-        f"Peak:`${stats['peak_margin']}`",
-        parse_mode="Markdown")
-
-async def cmd_history(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    h = stats.get("history", [])
-    if not h:
-        await u.message.reply_text("No trades yet!")
-        return
-    msg = "📜 *History (Last 5)*\n"
-    for t in reversed(h[-5:]):
-        msg += f"{t['result']} {t.get('side','')} #{t['no']} `${t['pnl']:+.4f}` [{t.get('reason','')}] {t['time']}\n"
-    await u.message.reply_text(msg, parse_mode="Markdown")
-
-async def cmd_balance(u: Update, c: ContextTypes.DEFAULT_TYPE):
-    try:
-        async with httpx.AsyncClient(timeout=15) as cl:
-            r    = await cl.get(f"{BASE_URL}/api/v1/account",
-                                params={"account_index": ACCOUNT_INDEX})
-            data = r.json()
-            col  = data.get("account", {}).get("collateral", "N/A")
-            upnl = data.get("account", {}).get("total_unrealized_pnl", "0")
-            await u.message.reply_text(
-                f"💰 *Balance*\nCollateral:`${col}`\nUnrealized:`${upnl}`",
-                parse_mode="Markdown")
-    except Exception as e:
-        await u.message.reply_text(f"❌ {e}")
-
-async def main():
-    global tg_app, signer_client, stats
-    stats = load_stats()
-    signer_client = lighter.SignerClient(
-        url=BASE_URL,
-        api_private_keys={API_KEY_INDEX: LIGHTER_PRIVATE_KEY},
-        account_index=ACCOUNT_INDEX
-    )
-    tg_app = Application.builder().token(TELEGRAM_BOT_TOKEN).updater(None).build()
-    for cmd, fn in [
-        ("start",   cmd_start),
-        ("status",  cmd_status),
-        ("signal",  cmd_signal),
-        ("stats",   cmd_stats),
-        ("history", cmd_history),
-        ("balance", cmd_balance),
-    ]:
-        tg_app.add_handler(CommandHandler(cmd, fn))
-    await tg_app.initialize()
-    await tg_app.start()
-    asyncio.create_task(strategy_loop())
-    offset = None
-    while True:
-        try:
-            updates = await tg_app.bot.get_updates(
-                offset=offset, timeout=10, allowed_updates=["message"]
-            )
-            for update in updates:
-                offset = update.update_id + 1
-                await tg_app.process_update(update)
-        except Exception as e:
-            logger.error(f"Polling: {e}")
-        await asyncio.sleep(1)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        adx_icon 
