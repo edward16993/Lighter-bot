@@ -1,3 +1,4 @@
+   # -*- coding: utf-8 -*-
 import os, asyncio, logging, json
 import numpy as np
 from datetime import datetime
@@ -457,5 +458,4 @@ async def cmd_signal(u: Update, c: ContextTypes.DEFAULT_TYPE):
             extra = ""
         else:
             sig   = "⚪ No signal"
-            extra = ""
-   
+  
