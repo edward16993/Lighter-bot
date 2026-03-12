@@ -365,12 +365,13 @@ async def cmd_backtest(u,c):
     except Exception as e: await u.message.reply_text("Backtest failed:"+str(e))
 
 async def post_init(application):
+    global sc,st
+    sc=lighter.SignerClient(url=URL,api_private_keys={KEY_IDX:PRV_KEY},account_index=ACC_IDX)
     asyncio.get_event_loop().create_task(loop_main())
 
 def main():
-    global app,sc,st
+    global app,st
     st=load_st()
-    sc=lighter.SignerClient(url=URL,api_private_keys={KEY_IDX:PRV_KEY},account_index=ACC_IDX)
     app=Application.builder().token(TG_TOKEN).post_init(post_init).build()
     for cmd,fn in [("start",cmd_start),("status",cmd_status),("signal",cmd_signal),
                    ("stats",cmd_stats),("history",cmd_history),("balance",cmd_balance),("backtest",cmd_backtest)]:
