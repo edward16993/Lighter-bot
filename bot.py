@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import os, asyncio, logging, json
 import numpy as np
 from datetime import datetime
@@ -6,16 +5,13 @@ import pandas as pd, httpx
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 import lighter
-
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 TG_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TG_CHAT  = os.environ["TELEGRAM_CHAT_ID"]
 ACC_IDX  = int(os.environ["ACCOUNT_INDEX"])
 KEY_IDX  = int(os.environ["API_KEY_INDEX"])
 PRV_KEY  = os.environ["LIGHTER_PRIVATE_KEY"]
-
 BASE_URL = "https://mainnet.zklighter.elliot.ai"
 LEV      = 5
 INTERVAL = 300
@@ -29,8 +25,6 @@ STATS_F  = "stats.json"
 START_M  = float(os.environ.get("ETH_MARGIN", "50"))
 DECIMALS = 3
 MIN_SIZE = 0.002
-
-# Global state
 cur_pos  = None
 entry_px = 0.0
 entry_sz = 0.0
@@ -40,7 +34,6 @@ tp_px    = 0.0
 tg_app   = None
 signer   = None
 stats    = {}
-
 def load_stats():
     try:
         with open(STATS_F) as f:
@@ -53,11 +46,9 @@ def load_stats():
             "entry_price": 0.0, "entry_size": 0.0, "entry_margin": 0.0,
             "sl_price": 0.0, "tp_price": 0.0, "history": []
         }
-
 def save_stats():
     with open(STATS_F, "w") as f:
         json.dump(stats, f)
-
 def calc_alma(s, p, sigma=0.85, offset=0.85):
     m = offset * (p - 1)
     sv = p / sigma
@@ -67,7 +58,6 @@ def calc_alma(s, p, sigma=0.85, offset=0.85):
     for i in range(p - 1, len(s)):
         r.iloc[i] = np.dot(w, s.iloc[i - p + 1:i + 1].values)
     return r
-
 def calc_atr(df, p=10):
     tr = pd.concat([
         df["high"] - df["low"],
@@ -75,7 +65,6 @@ def calc_atr(df, p=10):
         (df["low"] - df["close"].shift()).abs()
     ], axis=1).max(axis=1)
     return tr.ewm(span=p, adjust=False).mean()
-
 def calc_adx(df, p=14):
     tr = calc_atr(df, p)
     dp = (df["high"].diff()).clip(lower=0)
@@ -86,13 +75,11 @@ def calc_adx(df, p=14):
     dim = 100 * dm.ewm(span=p, adjust=False).mean() / tr.replace(0, np.nan)
     dx = 100 * (dip - dim).abs() / (dip + dim).replace(0, np.nan)
     return dx.ewm(span=p, adjust=False).mean()
-
 def calc_rsi(s, p=14):
     d = s.diff()
     g = d.clip(lower=0).ewm(span=p, adjust=False).mean()
     l = (-d.clip(upper=0)).ewm(span=p, adjust=False).mean()
     return 100 - (100 / (1 + g / l.replace(0, np.nan)))
-
 def calc_indicators(df):
     df = df.copy()
     df["fast"] = calc_alma(df["close"], 13)
@@ -102,7 +89,6 @@ def calc_indicators(df):
     df["rsi"] = calc_rsi(df["close"], 14)
     df["adx"] = calc_adx(df, 14)
     return df
-
 async def fetch_candles(lim=300):
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.get("https://www.okx.com/api/v5/market/candles",
@@ -114,7 +100,6 @@ async def fetch_candles(lim=300):
         df[col] = df[col].astype(float)
     df["time"] = pd.to_datetime(df["time"].astype(int), unit="ms")
     return df.sort_values("time").reset_index(drop=True)
-
 async def place_order(side, size, price, reduce_only=False):
     slip = 0.002
     if side == "BUY":
@@ -135,10 +120,8 @@ async def place_order(side, size, price, reduce_only=False):
     if err:
         raise Exception(str(err))
     return txh
-
 def calc_size(margin, price):
     return round(max((margin * LEV) / float(price), MIN_SIZE), DECIMALS)
-
 def record_close(exit_px, reason, side):
     global stats
     if side == "LONG":
@@ -164,18 +147,14 @@ def record_close(exit_px, reason, side):
     stats["history"] = stats["history"][-20:]
     save_stats()
     return pnl, new_m, "WIN" if pnl >= 0 else "LOSS"
-
 async def send_tg(msg):
     try:
         await tg_app.bot.send_message(
             chat_id=TG_CHAT, text=msg, parse_mode="Markdown")
     except Exception as e:
         logger.error("TG error: %s", e)
-
 async def strategy_loop():
     global cur_pos, entry_px, entry_sz, entry_mg, sl_px, tp_px, stats
-
-    # Restore position on restart
     try:
         api = lighter.ApiClient(lighter.Configuration(host=BASE_URL))
         acc = lighter.AccountApi(api)
@@ -194,7 +173,6 @@ async def strategy_loop():
                     logger.info("Restored: %s position", cur_pos)
     except Exception as e:
         logger.error("Restore error: %s", e)
-
     ps = cur_pos if cur_pos else "Wait"
     await send_tg(
         "*ALMA Bot Started*\n"
@@ -203,7 +181,6 @@ async def strategy_loop():
         "Short: ALMA(13/21) + RSI<50 + ADX>20\n"
         "`" + str(LEV) + "x` | 5min | SL:" + str(SL_MULT) + "x TP:" + str(TP_MULT) + "x"
     )
-
     while True:
         try:
             df   = await fetch_candles(300)
@@ -211,22 +188,17 @@ async def strategy_loop():
             df   = df.dropna()
             curr = df.iloc[-1]
             prev = df.iloc[-2]
-
             price = float(curr["close"])
             atr   = float(curr["atr"])
             rsi   = float(curr["rsi"])
             adx   = float(curr["adx"])
-
             bull_cross = (curr["fast"] > curr["slow"]) and (prev["fast"] <= prev["slow"])
             bear_cross = (curr["fast"] < curr["slow"]) and (prev["fast"] >= prev["slow"])
             bull_trend = price > float(curr["ema200"])
             trending   = adx > ADX_MIN
-
             long_sig  = bull_cross and bull_trend and trending
             short_sig = bear_cross and (rsi < 50) and trending
-
             logger.info("ETH=$%.2f RSI=%.1f ADX=%.1f pos=%s", price, rsi, adx, cur_pos)
-
             if cur_pos is None:
                 if long_sig and stats["current_margin"] >= MIN_MAR:
                     mg  = stats["current_margin"]
@@ -256,7 +228,6 @@ async def strategy_loop():
                     except Exception as e:
                         cur_pos = None
                         await send_tg("LONG Failed: " + str(e))
-
                 elif short_sig and stats["current_margin"] >= MIN_MAR:
                     mg  = stats["current_margin"]
                     si  = calc_size(mg, price)
@@ -285,7 +256,6 @@ async def strategy_loop():
                     except Exception as e:
                         cur_pos = None
                         await send_tg("SHORT Failed: " + str(e))
-
             elif cur_pos == "LONG":
                 unr = round((price - entry_px) * entry_sz, 4)
                 reason = None
@@ -311,7 +281,6 @@ async def strategy_loop():
                         cur_pos = None
                     except Exception as e:
                         await send_tg("LONG Close Failed: " + str(e))
-
             elif cur_pos == "SHORT":
                 unr = round((entry_px - price) * entry_sz, 4)
                 reason = None
@@ -337,13 +306,10 @@ async def strategy_loop():
                         cur_pos = None
                     except Exception as e:
                         await send_tg("SHORT Close Failed: " + str(e))
-
         except Exception as e:
             logger.error("Loop error: %s", e)
             await send_tg("Loop error: " + str(e))
-
         await asyncio.sleep(INTERVAL)
-
 async def cmd_start(u, c):
     await u.message.reply_text(
         "*ALMA Bot Commands*\n"
@@ -354,7 +320,6 @@ async def cmd_start(u, c):
         "/balance - DEX balance\n"
         "/backtest - Run backtest",
         parse_mode="Markdown")
-
 async def cmd_status(u, c):
     try:
         df   = await fetch_candles(300)
@@ -390,7 +355,6 @@ async def cmd_status(u, c):
             parse_mode="Markdown")
     except Exception as e:
         await u.message.reply_text("Error: " + str(e))
-
 async def cmd_signal(u, c):
     try:
         df   = await fetch_candles(300)
@@ -429,7 +393,6 @@ async def cmd_signal(u, c):
             parse_mode="Markdown")
     except Exception as e:
         await u.message.reply_text("Error: " + str(e))
-
 async def cmd_stats(u, c):
     t   = stats["total_trades"]
     wr  = round(stats["wins"] / max(t, 1) * 100, 1)
@@ -444,7 +407,6 @@ async def cmd_stats(u, c):
         "PnL: `$" + str(round(stats["total_pnl"], 4)) + "`\n"
         "Margin: `$" + str(stats["current_margin"]) + "` Peak: `$" + str(stats["peak_margin"]) + "`",
         parse_mode="Markdown")
-
 async def cmd_history(u, c):
     h = stats.get("history", [])
     if not h:
@@ -459,7 +421,6 @@ async def cmd_history(u, c):
             "` -> `$" + str(t["new_margin"]) + "`"
         )
     await u.message.reply_text("\n".join(lines), parse_mode="Markdown")
-
 async def cmd_balance(u, c):
     try:
         api = lighter.ApiClient(lighter.Configuration(host=BASE_URL))
@@ -475,11 +436,29 @@ async def cmd_balance(u, c):
             parse_mode="Markdown")
     except Exception as e:
         await u.message.reply_text("Error: " + str(e))
-
 async def cmd_backtest(u, c):
-    await u.message.reply_text("Backtest running... 30-60sec")
-    try:
-        results = []
-        for days, label in [(90, "3M"), (365, "1Y")]:
-            ac  = []
-            cur = int(datetime.now().timesta
+    await u.message.reply_text("Backtest disabled. Use separate backtest script!")
+async def post_init(application):
+    global signer
+    signer = lighter.SignerClient(
+        url=BASE_URL,
+        api_private_keys={KEY_IDX: PRV_KEY},
+        account_index=ACC_IDX)
+    asyncio.get_event_loop().create_task(strategy_loop())
+def main():
+    global tg_app, stats
+    stats  = load_stats()
+    tg_app = Application.builder().token(TG_TOKEN).post_init(post_init).build()
+    for cmd, fn in [
+        ("start",    cmd_start),
+        ("status",   cmd_status),
+        ("signal",   cmd_signal),
+        ("stats",    cmd_stats),
+        ("history",  cmd_history),
+        ("balance",  cmd_balance),
+        ("backtest", cmd_backtest),
+    ]:
+        tg_app.add_handler(CommandHandler(cmd, fn))
+    tg_app.run_polling(drop_pending_updates=True)
+if __name__ == "__main__":
+    main()
