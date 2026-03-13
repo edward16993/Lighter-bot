@@ -97,14 +97,15 @@ async def place_order(side,size,price,reduce_only=False):
     slip=0.002
     if side=="BUY": op=round(float(price)*(1+slip),2)
     else: op=round(float(price)*(1-slip),2)
-    ba=int(float(size)*10000)
+    ba=int(round(float(size)*10000))
+    op=int(round(float(op)*100))
     tx,txh,err=await signer.create_order(
-        market_index=MKT_IDX,
+        market_index=int(MKT_IDX),
         client_order_index=int(datetime.now().timestamp()),
-        base_amount=ba,price=op,is_ask=(side=="SELL"),
+        base_amount=ba,price=op,is_ask=bool(side=="SELL"),
         order_type=signer.ORDER_TYPE_MARKET,
         time_in_force=signer.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL,
-        reduce_only=reduce_only,order_expiry=signer.DEFAULT_IOC_EXPIRY)
+        reduce_only=bool(reduce_only),order_expiry=signer.DEFAULT_IOC_EXPIRY)
     if err: raise Exception(str(err))
     return txh
 def calc_size(margin,price):
