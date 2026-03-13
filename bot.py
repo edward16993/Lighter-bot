@@ -149,7 +149,7 @@ async def strategy_loop():
     ps=cur_pos if cur_pos else "Wait"
     await send_tg(
         "*ALMA Bot Started*\n"
-        "Margin: *$"+str(stats["current_margin"])+"* | "+ps+"\n"
+        "Margin: $*"+str(stats["current_margin"])+"* | "+ps+"\n"
         "Long:  ALMA(13/21) + EMA200 + ADX>20\n"
         "Short: ALMA(13/21) + RSI lt 50 + ADX>20\n"
         "*"+str(LEV)+"x* | 5min | SL:"+str(SL_MULT)+"x TP:"+str(TP_MULT)+"x")
@@ -171,9 +171,9 @@ async def strategy_loop():
                     nsl=round(price-(SL_MULT*atr),2); ntp=round(price+(TP_MULT*atr),2)
                     await send_tg(
                         "*ETH LONG Signal*\n"
-                        "Price: *$"+str(round(price,2))+"* ADX: *"+str(round(adx,1))+"*\n"
-                        "SL: *$"+str(nsl)+"* TP: *$"+str(ntp)+"*\n"
-                        "Margin: *$"+str(mg)+"*")
+                        "Price: $*"+str(round(price,2))+"* ADX: *"+str(round(adx,1))+"*\n"
+                        "SL: $*"+str(nsl)+"* TP: $*"+str(ntp)+"*\n"
+                        "Margin: $*"+str(mg)+"*")
                     try:
                         await place_order("BUY",si,price)
                         cur_pos="LONG"; entry_px=price; entry_sz=si; entry_mg=mg
@@ -184,8 +184,8 @@ async def strategy_loop():
                         stats["long_trades"]=stats.get("long_trades",0)+1; save_stats()
                         await send_tg(
                             "*LONG Opened!*\n"
-                            "Entry: *$"+str(round(price,2))+"* | *"+str(si)+" ETH*\n"
-                            "SL: *$"+str(nsl)+"* TP: *$"+str(ntp)+"*")
+                            "Entry: $*"+str(round(price,2))+"* | *"+str(si)+" ETH*\n"
+                            "SL: $*"+str(nsl)+"* TP: $*"+str(ntp)+"*")
                     except Exception as e:
                         cur_pos=None; await send_tg("LONG Failed: "+str(e))
                 elif short_sig and stats["current_margin"]>=MIN_MAR:
@@ -193,9 +193,9 @@ async def strategy_loop():
                     nsl=round(price+(SL_MULT*atr),2); ntp=round(price-(TP_MULT*atr),2)
                     await send_tg(
                         "*ETH SHORT Signal*\n"
-                        "Price: *$"+str(round(price,2))+"* ADX: *"+str(round(adx,1))+"*\n"
-                        "SL: *$"+str(nsl)+"* TP: *$"+str(ntp)+"*\n"
-                        "Margin: *$"+str(mg)+"*")
+                        "Price: $*"+str(round(price,2))+"* ADX: *"+str(round(adx,1))+"*\n"
+                        "SL: $*"+str(nsl)+"* TP: $*"+str(ntp)+"*\n"
+                        "Margin: $*"+str(mg)+"*")
                     try:
                         await place_order("SELL",si,price)
                         cur_pos="SHORT"; entry_px=price; entry_sz=si; entry_mg=mg
@@ -206,8 +206,8 @@ async def strategy_loop():
                         stats["short_trades"]=stats.get("short_trades",0)+1; save_stats()
                         await send_tg(
                             "*SHORT Opened!*\n"
-                            "Entry: *$"+str(round(price,2))+"* | *"+str(si)+" ETH*\n"
-                            "SL: *$"+str(nsl)+"* TP: *$"+str(ntp)+"*")
+                            "Entry: $*"+str(round(price,2))+"* | *"+str(si)+" ETH*\n"
+                            "SL: $*"+str(nsl)+"* TP: $*"+str(ntp)+"*")
                     except Exception as e:
                         cur_pos=None; await send_tg("SHORT Failed: "+str(e))
             elif cur_pos=="LONG":
@@ -216,7 +216,7 @@ async def strategy_loop():
                 elif price<=sl_px: reason="SL"
                 elif bear_cross: reason="Cross"
                 if reason:
-                    await send_tg("*LONG "+reason+"*\nPrice: *$"+str(round(price,2))+"* Unrealized: *$"+str(unr)+"*")
+                    await send_tg("*LONG "+reason+"*\nPrice: $*"+str(round(price,2))+"* Unrealized: $*"+str(unr)+"*")
                     try:
                         await place_order("SELL",entry_sz,price,reduce_only=True)
                         pnl,new_m,outcome=record_close(price,reason,"LONG")
@@ -224,9 +224,9 @@ async def strategy_loop():
                         sg="+" if pnl>=0 else ""
                         await send_tg(
                             outcome+" *LONG #"+str(stats["total_trades"])+"* ["+reason+"]\n"
-                            "Entry: *$"+str(entry_px)+"* Exit: *$"+str(round(price,2))+"*\n"
+                            "Entry: $*"+str(entry_px)+"* Exit: $*"+str(round(price,2))+"*\n"
                             "PnL: *"+sg+"$"+str(pnl)+"* WR: *"+str(wr)+"%*\n"
-                            "Margin: *$"+str(new_m)+"*")
+                            "Margin: $*"+str(new_m)+"*")
                         cur_pos=None
                     except Exception as e: await send_tg("LONG Close Failed: "+str(e))
             elif cur_pos=="SHORT":
@@ -235,7 +235,7 @@ async def strategy_loop():
                 elif price>=sl_px: reason="SL"
                 elif bull_cross: reason="Cross"
                 if reason:
-                    await send_tg("*SHORT "+reason+"*\nPrice: *$"+str(round(price,2))+"* Unrealized: *$"+str(unr)+"*")
+                    await send_tg("*SHORT "+reason+"*\nPrice: $*"+str(round(price,2))+"* Unrealized: $*"+str(unr)+"*")
                     try:
                         await place_order("BUY",entry_sz,price,reduce_only=True)
                         pnl,new_m,outcome=record_close(price,reason,"SHORT")
@@ -243,9 +243,9 @@ async def strategy_loop():
                         sg="+" if pnl>=0 else ""
                         await send_tg(
                             outcome+" *SHORT #"+str(stats["total_trades"])+"* ["+reason+"]\n"
-                            "Entry: *$"+str(entry_px)+"* Exit: *$"+str(round(price,2))+"*\n"
+                            "Entry: $*"+str(entry_px)+"* Exit: $*"+str(round(price,2))+"*\n"
                             "PnL: *"+sg+"$"+str(pnl)+"* WR: *"+str(wr)+"%*\n"
-                            "Margin: *$"+str(new_m)+"*")
+                            "Margin: $*"+str(new_m)+"*")
                         cur_pos=None
                     except Exception as e: await send_tg("SHORT Close Failed: "+str(e))
         except Exception as e:
@@ -266,15 +266,15 @@ async def cmd_status(u,c):
         extra=""
         if cur_pos and entry_px>0:
             unr=round((price-entry_px)*entry_sz,4) if cur_pos=="LONG" else round((entry_px-price)*entry_sz,4)
-            extra="\nUnrealized: *$"+str(unr)+"*\nSL: *$"+str(sl_px)+"* TP: *$"+str(tp_px)+"*"
+            extra="\nUnrealized: $*"+str(unr)+"*\nSL: $*"+str(sl_px)+"* TP: $*"+str(tp_px)+"*"
         await u.message.reply_text(
             "*ETH Status*\n"
-            "Price: *$"+str(round(price,2))+"* | "+trend+"\n"
-            "RSI: *"+str(rsi)+"* ATR: *$"+str(atr)+"*\n"
+            "Price: $*"+str(round(price,2))+"* | "+trend+"\n"
+            "RSI: *"+str(rsi)+"* ATR: $*"+str(atr)+"*\n"
             "ADX: *"+str(adx)+"* ["+adx_s+"]\n"
-            "EMA200: *$"+str(ema200)+"*\n"
+            "EMA200: $*"+str(ema200)+"*\n"
             "Position: "+ps+extra+"\n"
-            "Margin: *$"+str(stats["current_margin"])+"*",
+            "Margin: $*"+str(stats["current_margin"])+"*",
             parse_mode="Markdown")
     except Exception as e: await u.message.reply_text("Error: "+str(e))
 async def cmd_signal(u,c):
@@ -288,9 +288,9 @@ async def cmd_signal(u,c):
         bull_trend=price>float(curr["ema200"]); trending=adx>ADX_MIN
         adx_s="Trending" if trending else "Sideways-SKIP"
         if bull_cross and bull_trend and trending:
-            sig="LONG NOW!\nSL: *$"+str(round(price-SL_MULT*atr,2))+"* TP: *$"+str(round(price+TP_MULT*atr,2))+"*"
+            sig="LONG NOW!\nSL: $*"+str(round(price-SL_MULT*atr,2))+"* TP: $*"+str(round(price+TP_MULT*atr,2))+"*"
         elif bear_cross and rsi<50 and trending:
-            sig="SHORT NOW!\nSL: *$"+str(round(price+SL_MULT*atr,2))+"* TP: *$"+str(round(price-TP_MULT*atr,2))+"*"
+            sig="SHORT NOW!\nSL: $*"+str(round(price+SL_MULT*atr,2))+"* TP: $*"+str(round(price-TP_MULT*atr,2))+"*"
         elif bull_cross and bull_trend and not trending: sig="LONG blocked - ADX low"
         elif bear_cross and rsi<50 and not trending: sig="SHORT blocked - ADX low"
         elif bull_trend and curr["fast"]>curr["slow"]: sig="Bullish - Wait cross"
@@ -298,7 +298,7 @@ async def cmd_signal(u,c):
         else: sig="No signal"
         await u.message.reply_text(
             "*Signal*\n"
-            "Price: *$"+str(round(price,2))+"* RSI: *"+str(rsi)+"*\n"
+            "Price: $*"+str(round(price,2))+"* RSI: *"+str(rsi)+"*\n"
             "ADX: *"+str(adx)+"* ["+adx_s+"]\n"+sig,
             parse_mode="Markdown")
     except Exception as e: await u.message.reply_text("Error: "+str(e))
@@ -311,8 +311,8 @@ async def cmd_stats(u,c):
         "*Stats*\n"
         "Trades: *"+str(t)+"* (L:"+str(lt)+" S:"+str(sh)+")\n"
         "WR: *"+str(wr)+"%* | *"+sg+str(g)+"%*\n"
-        "PnL: *$"+str(round(stats["total_pnl"],4))+"*\n"
-        "Margin: *$"+str(stats["current_margin"])+"* Peak: *$"+str(stats["peak_margin"])+"*",
+        "PnL: $*"+str(round(stats["total_pnl"],4))+"*\n"
+        "Margin: $*"+str(stats["current_margin"])+"* Peak: $*"+str(stats["peak_margin"])+"*",
         parse_mode="Markdown")
 async def cmd_history(u,c):
     h=stats.get("history",[])
@@ -320,7 +320,7 @@ async def cmd_history(u,c):
     lines=["*Last trades:*"]
     for t in h[-5:]:
         sg="+" if t["pnl"]>=0 else ""
-        lines.append("#"+str(t["no"])+" "+t["side"]+" ["+t["reason"]+"] *"+sg+"$"+str(t["pnl"])+"* -> *$"+str(t["new_margin"])+"*")
+        lines.append("#"+str(t["no"])+" "+t["side"]+" ["+t["reason"]+"] *"+sg+"$"+str(t["pnl"])+"* -> $*"+str(t["new_margin"])+"*")
     await u.message.reply_text("\n".join(lines),parse_mode="Markdown")
 async def cmd_balance(u,c):
     try:
@@ -328,7 +328,7 @@ async def cmd_balance(u,c):
         acc=lighter.AccountApi(api); r=await acc.account(str(ACC_IDX)); await api.close()
         col=getattr(r,"collateral","?"); upnl=getattr(r,"unrealized_pnl","?")
         await u.message.reply_text(
-            "*Balance*\nCollateral: *$"+str(col)+"*\nUnrealized: *$"+str(upnl)+"*",
+            "*Balance*\nCollateral: $*"+str(col)+"*\nUnrealized: $*"+str(upnl)+"*",
             parse_mode="Markdown")
     except Exception as e: await u.message.reply_text("Error: "+str(e))
 async def post_init(application):
