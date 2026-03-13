@@ -100,8 +100,8 @@ async def candles(lim=300):
 
 async def order(side,size,price,ro=False):
     slp=0.002
-    op=round(price*(1+slp),2) if side=="BUY" else round(price*(1-slp),2)
-    ba=int(size*10000)
+    op=round(float(price)*(1+slp),2) if side=="BUY" else round(float(price)*(1-slp),2)
+    ba=int(float(size)*10000)
     tx,txh,err=await sc.create_order(
         market_index=MKT,
         client_order_index=int(datetime.now().timestamp()),
@@ -154,10 +154,10 @@ async def loop_main():
 
     ps=pos if pos else "Wait"
     await tg("*ALMA Bot Started*\n"
-             "Margin:$"+str(st["current_margin"])+" | "+ps+"\n"
+             "Margin:`$"+str(st["current_margin"])+"` | "+ps+"\n"
              "Long: ALMA(13/21)+EMA200+ADX>20\n"
              "Short: ALMA(13/21)+RSI<50+ADX>20\n"
-             +str(LEV)+"x | 5min | SL:"+str(SL_M)+"x TP:"+str(TP_M)+"x")
+             "`"+str(LEV)+"x` | 5min | SL:"+str(SL_M)+"x TP:"+str(TP_M)+"x")
 
     while True:
         try:
@@ -174,28 +174,28 @@ async def loop_main():
                 if ls and st["current_margin"]>=MIN_M:
                     mg=st["current_margin"]; si=sz(mg,price)
                     nsl=round(price-(SL_M*at2),2); ntp=round(price+(TP_M*at2),2)
-                    await tg("*ETH LONG*\nPrice:$"+str(round(price,2))+" ADX:"+str(round(ax2,1))+"\nSL:$"+str(nsl)+" TP:$"+str(ntp)+"\nMargin:$"+str(mg))
+                    await tg("*ETH LONG Signal*\nPrice:`$"+str(round(price,2))+"` ADX:`"+str(round(ax2,1))+"`\nSL:`$"+str(nsl)+"` TP:`$"+str(ntp)+"`\nMargin:`$"+str(mg)+"`")
                     try:
                         await order("BUY",si,price)
                         pos="LONG"; ep=price; esz=si; em=mg; slp=nsl; tpp=ntp
                         st["entry_price"]=price; st["entry_size"]=si
                         st["entry_margin"]=mg; st["sl_price"]=nsl; st["tp_price"]=ntp
                         st["long_trades"]=st.get("long_trades",0)+1; save_st()
-                        await tg("*LONG Opened!*\n$"+str(round(price,2))+" | "+str(si)+" ETH")
+                        await tg("*LONG Opened!*\nEntry:`$"+str(round(price,2))+"` | `"+str(si)+" ETH`\nSL:`$"+str(nsl)+"` TP:`$"+str(ntp)+"`")
                     except Exception as e:
                         pos=None; await tg("LONG Failed:"+str(e))
 
                 elif ss and st["current_margin"]>=MIN_M:
                     mg=st["current_margin"]; si=sz(mg,price)
                     nsl=round(price+(SL_M*at2),2); ntp=round(price-(TP_M*at2),2)
-                    await tg("*ETH SHORT*\nPrice:$"+str(round(price,2))+" ADX:"+str(round(ax2,1))+"\nSL:$"+str(nsl)+" TP:$"+str(ntp)+"\nMargin:$"+str(mg))
+                    await tg("*ETH SHORT Signal*\nPrice:`$"+str(round(price,2))+"` ADX:`"+str(round(ax2,1))+"`\nSL:`$"+str(nsl)+"` TP:`$"+str(ntp)+"`\nMargin:`$"+str(mg)+"`")
                     try:
                         await order("SELL",si,price)
                         pos="SHORT"; ep=price; esz=si; em=mg; slp=nsl; tpp=ntp
                         st["entry_price"]=price; st["entry_size"]=si
                         st["entry_margin"]=mg; st["sl_price"]=nsl; st["tp_price"]=ntp
                         st["short_trades"]=st.get("short_trades",0)+1; save_st()
-                        await tg("*SHORT Opened!*\n$"+str(round(price,2))+" | "+str(si)+" ETH")
+                        await tg("*SHORT Opened!*\nEntry:`$"+str(round(price,2))+"` | `"+str(si)+" ETH`\nSL:`$"+str(nsl)+"` TP:`$"+str(ntp)+"`")
                     except Exception as e:
                         pos=None; await tg("SHORT Failed:"+str(e))
 
@@ -205,12 +205,13 @@ async def loop_main():
                 elif price<=slp: rs3="SL"
                 elif ec: rs3="Cross"
                 if rs3:
-                    await tg("*LONG "+rs3+"*\n$"+str(round(price,2))+" Unr:$"+str(un))
+                    await tg("*LONG "+rs3+"*\nPrice:`$"+str(round(price,2))+"` Unr:`$"+str(un)+"`")
                     try:
                         await order("SELL",esz,price,ro=True)
                         pnl,nm,oc=close_trade(price,rs3,"LONG")
                         wr=round(st["wins"]/max(st["total_trades"],1)*100,1)
-                        await tg(oc+" *LONG #"+str(st["total_trades"])+"* ["+rs3+"]\n$"+str(ep)+"->$"+str(round(price,2))+"\nPnL:$"+str(pnl)+" WR:"+str(wr)+"%\nMargin:$"+str(nm))
+                        sg="+" if pnl>=0 else ""
+                        await tg(oc+" *LONG #"+str(st["total_trades"])+"* ["+rs3+"]\nEntry:`$"+str(ep)+"` Exit:`$"+str(round(price,2))+"`\nPnL:`"+sg+"$"+str(pnl)+"` WR:`"+str(wr)+"%`\nMargin:`$"+str(nm)+"`")
                         pos=None
                     except Exception as e: await tg("LONG Close Failed:"+str(e))
 
@@ -220,12 +221,13 @@ async def loop_main():
                 elif price>=slp: rs3="SL"
                 elif bc: rs3="Cross"
                 if rs3:
-                    await tg("*SHORT "+rs3+"*\n$"+str(round(price,2))+" Unr:$"+str(un))
+                    await tg("*SHORT "+rs3+"*\nPrice:`$"+str(round(price,2))+"` Unr:`$"+str(un)+"`")
                     try:
                         await order("BUY",esz,price,ro=True)
                         pnl,nm,oc=close_trade(price,rs3,"SHORT")
                         wr=round(st["wins"]/max(st["total_trades"],1)*100,1)
-                        await tg(oc+" *SHORT #"+str(st["total_trades"])+"* ["+rs3+"]\n$"+str(ep)+"->$"+str(round(price,2))+"\nPnL:$"+str(pnl)+" WR:"+str(wr)+"%\nMargin:$"+str(nm))
+                        sg="+" if pnl>=0 else ""
+                        await tg(oc+" *SHORT #"+str(st["total_trades"])+"* ["+rs3+"]\nEntry:`$"+str(ep)+"` Exit:`$"+str(round(price,2))+"`\nPnL:`"+sg+"$"+str(pnl)+"` WR:`"+str(wr)+"%`\nMargin:`$"+str(nm)+"`")
                         pos=None
                     except Exception as e: await tg("SHORT Close Failed:"+str(e))
 
@@ -247,13 +249,13 @@ async def cmd_status(u,c):
         ex=""
         if pos and ep>0:
             un=round((pr-ep)*esz,4) if pos=="LONG" else round((ep-pr)*esz,4)
-            ex="\nUnrealized:$"+str(un)+"\nSL:$"+str(slp)+" TP:$"+str(tpp)
+            ex="\nUnrealized:`$"+str(un)+"`\nSL:`$"+str(slp)+"` TP:`$"+str(tpp)+"`"
         await u.message.reply_text(
-            "*ETH Status*\nPrice:$"+str(round(pr,2))+" | "+tr+"\n"
-            "RSI:"+str(rs2)+" ATR:$"+str(at2)+"\n"
-            "ADX:"+str(ax2)+" ["+ax_s+"]\n"
-            "EMA200:$"+str(e2)+"\nPos:"+ps+ex+"\n"
-            "Margin:$"+str(st["current_margin"]),parse_mode="Markdown")
+            "*ETH Status*\nPrice:`$"+str(round(pr,2))+"` | "+tr+"\n"
+            "RSI:`"+str(rs2)+"` ATR:`$"+str(at2)+"`\n"
+            "ADX:`"+str(ax2)+"` ["+ax_s+"]\n"
+            "EMA200:`$"+str(e2)+"`\nPos:"+ps+ex+"\n"
+            "Margin:`$"+str(st["current_margin"])+"`",parse_mode="Markdown")
     except Exception as e: await u.message.reply_text("Error:"+str(e))
 
 async def cmd_signal(u,c):
@@ -264,17 +266,17 @@ async def cmd_signal(u,c):
         bc=(cu["af"]>cu["as"]) and (pv["af"]<=pv["as"])
         ec=(cu["af"]<cu["as"]) and (pv["af"]>=pv["as"])
         bt=pr>cu["e2"]; tr=ax2>ADX_T
-        if bc and bt and tr: sig="LONG NOW!\nSL:$"+str(round(pr-SL_M*at2,2))+" TP:$"+str(round(pr+TP_M*at2,2))
-        elif ec and rs2<50 and tr: sig="SHORT NOW!\nSL:$"+str(round(pr+SL_M*at2,2))+" TP:$"+str(round(pr-TP_M*at2,2))
-        elif bc and bt and not tr: sig="LONG blocked-ADX low"
-        elif ec and rs2<50 and not tr: sig="SHORT blocked-ADX low"
-        elif bt and cu["af"]>cu["as"]: sig="Bullish-Wait cross"
-        elif rs2<50 and cu["af"]<cu["as"]: sig="Bearish-Wait cross"
+        if bc and bt and tr: sig="LONG NOW!\nSL:`$"+str(round(pr-SL_M*at2,2))+"` TP:`$"+str(round(pr+TP_M*at2,2))+"`"
+        elif ec and rs2<50 and tr: sig="SHORT NOW!\nSL:`$"+str(round(pr+SL_M*at2,2))+"` TP:`$"+str(round(pr-TP_M*at2,2))+"`"
+        elif bc and bt and not tr: sig="LONG blocked - ADX low"
+        elif ec and rs2<50 and not tr: sig="SHORT blocked - ADX low"
+        elif bt and cu["af"]>cu["as"]: sig="Bullish - Wait cross"
+        elif rs2<50 and cu["af"]<cu["as"]: sig="Bearish - Wait cross"
         else: sig="No signal"
         ax_s="Trending" if tr else "Sideways-SKIP"
         await u.message.reply_text(
-            "*Signal*\nPrice:$"+str(round(pr,2))+" RSI:"+str(rs2)+"\n"
-            "ADX:"+str(ax2)+" ["+ax_s+"]\n"+sig,parse_mode="Markdown")
+            "*Signal*\nPrice:`$"+str(round(pr,2))+"` RSI:`"+str(rs2)+"`\n"
+            "ADX:`"+str(ax2)+"` ["+ax_s+"]\n"+sig,parse_mode="Markdown")
     except Exception as e: await u.message.reply_text("Error:"+str(e))
 
 async def cmd_stats(u,c):
@@ -283,10 +285,10 @@ async def cmd_stats(u,c):
     lt=st.get("long_trades",0); sh=st.get("short_trades",0)
     sg="+" if g>=0 else ""
     await u.message.reply_text(
-        "*Stats*\nTrades:"+str(t)+" (L:"+str(lt)+" S:"+str(sh)+")\n"
-        "WR:"+str(wr)+"% | "+sg+str(g)+"%\n"
-        "PnL:$"+str(round(st["total_pnl"],4))+"\n"
-        "Margin:$"+str(st["current_margin"])+" Peak:$"+str(st["peak_margin"]),
+        "*Stats*\nTrades:`"+str(t)+"` (L:"+str(lt)+" S:"+str(sh)+")\n"
+        "WR:`"+str(wr)+"%` | `"+sg+str(g)+"%`\n"
+        "PnL:`$"+str(round(st["total_pnl"],4))+"`\n"
+        "Margin:`$"+str(st["current_margin"])+"` Peak:`$"+str(st["peak_margin"])+"`",
         parse_mode="Markdown")
 
 async def cmd_history(u,c):
@@ -295,7 +297,7 @@ async def cmd_history(u,c):
     lines=["*Last trades:*"]
     for t2 in h[-5:]:
         sg="+" if t2["pnl"]>=0 else ""
-        lines.append("#"+str(t2["no"])+" "+t2["side"]+" ["+t2["reason"]+"] "+sg+"$"+str(t2["pnl"])+" ->$"+str(t2["new_margin"]))
+        lines.append("#"+str(t2["no"])+" "+t2["side"]+" ["+t2["reason"]+"] `"+sg+"$"+str(t2["pnl"])+"` ->`$"+str(t2["new_margin"])+"`")
     await u.message.reply_text("\n".join(lines),parse_mode="Markdown")
 
 async def cmd_balance(u,c):
