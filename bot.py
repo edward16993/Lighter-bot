@@ -423,7 +423,5 @@ async def cmd_history(u,c):
                 sg="+" if t["pnl"]>=0 else ""
                 icon="✅" if t["pnl"]>=0 else "❌"
                 pct_sg="+" if t.get("pct",0)>=0 else ""
-                msg+=(icon+" #"+str(t["no"])+" "+t["side"]
-                    +" ["+t["reason"]+"] *"+sg+"$"+str(t["pnl"])
-                    +"* ("+pct_sg+str(t.get("pct",0))
-    
+                msg+=icon+" #"+str(t["no"])+" "+t["side"]+" ["+t["reason"]+"] *"+sg+"$"+str(t["pnl"])+"* ("+pct_sg+str(t.get("pct",0))+"%) → *$"+str(t["new_margin"])+"*\n"
+          
