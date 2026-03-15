@@ -451,7 +451,7 @@ async def post_init(application):
     for coin in MARKETS:
         asyncio.get_event_loop().create_task(strategy_loop(coin))
 
-def main():
+async def main():
     global tg_app,state
     for coin in MARKETS:
         state[coin]={
@@ -464,7 +464,10 @@ def main():
     for cmd,fn in [("start",cmd_start),("status",cmd_status),("signal",cmd_signal),
                    ("stats",cmd_stats),("history",cmd_history),("balance",cmd_balance)]:
         tg_app.add_handler(CommandHandler(cmd,fn))
-    tg_app.run_polling(drop_pending_updates=True)
+    await tg_app.initialize()
+    await tg_app.start()
+    await tg_app.updater.start_polling(drop_pending_updates=True)
+    await asyncio.Event().wait()
 
 if __name__=="__main__":
-    main()
+    asyncio.run(main())
