@@ -128,9 +128,9 @@ async def place_order(coin,side,size,price,reduce_only=False):
         market_index=int(mkt["market_id"]),
         client_order_index=int(datetime.now().timestamp()),
         base_amount=ba,price=op_int,is_ask=bool(side=="SELL"),
-        order_type=0,
-        time_in_force=1,
-        reduce_only=bool(reduce_only),order_expiry=0)
+        order_type=signer.ORDER_TYPE_MARKET,
+        time_in_force=signer.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL,
+        reduce_only=bool(reduce_only),order_expiry=signer.DEFAULT_IOC_EXPIRY)
     if err: raise Exception(str(err))
     return txh
 
@@ -170,7 +170,7 @@ async def strategy_loop(coin):
     try:
         api=lighter.ApiClient(lighter.Configuration(host=BASE_URL))
         acc=lighter.AccountApi(api)
-        r=await acc.account(ACC_IDX); await api.close()
+        r=await acc.account(str(ACC_IDX)); await api.close()
         for pos2 in (getattr(r,"positions",[]) or []):
             if getattr(pos2,"market_index",-1)==mkt["market_id"]:
                 sz=float(getattr(pos2,"base_amount",0) or 0)
@@ -424,56 +424,4 @@ async def cmd_history(u,c):
                 icon="✅" if t["pnl"]>=0 else "❌"
                 pct_sg="+" if t.get("pct",0)>=0 else ""
                 msg+=icon+" #"+str(t["no"])+" "+t["side"]+" ["+t["reason"]+"] *"+sg+"$"+str(t["pnl"])+"* ("+pct_sg+str(t.get("pct",0))+"%) → *$"+str(t["new_margin"])+"*\n"
-            msg+="\n"
-    await u.message.reply_text(msg,parse_mode="Markdown")
-
-async def cmd_balance(u,c):
-    try:
-        api=lighter.ApiClient(lighter.Configuration(host=BASE_URL))
-        acc=lighter.AccountApi(api)
-        r=await acc.account(ACC_IDX)
-        await api.close()
-        equity=getattr(r,"equity",None) or getattr(r,"total_equity",None) or "N/A"
-        avail=getattr(r,"available_balance",None) or getattr(r,"free_collateral",None) or "N/A"
-        msg="💰 *Account Balance*\n\n"
-        msg+="💎 Equity: *$"+str(equity)+"*\n"
-        msg+="✅ Available: *$"+str(avail)+"*\n\n"
-        for coin in MARKETS:
-            s=state[coin]["stats"]; em=MARKETS[coin]["emoji"]
-            msg+=em+" *"+coin+"* Margin: *$"+str(s["current_margin"])+"*\n"
-        await u.message.reply_text(msg,parse_mode="Markdown")
-    except Exception as e:
-        await u.message.reply_text("❌ Balance Error: "+str(e))
-async def main():
-    global tg_app,signer,state
-    for coin in MARKETS:
-        state[coin]={"position":None,"entry_px":0.0,"entry_sz":0.0,
-                     "entry_mg":0.0,"sl_px":0.0,"tp_px":0.0,
-                     "stats":load_stats(coin)}
-    api=lighter.ApiClient(lighter.Configuration(host=BASE_URL))
-    signer=lighter.BlockchainClient(
-        api_client=api,
-        private_key=PRV_KEY,
-        account_index=ACC_IDX,
-        api_key_index=KEY_IDX)
-    await api.close()
-    tg_app=Application.builder().token(TG_TOKEN).build()
-    tg_app.add_handler(CommandHandler("start",cmd_start))
-    tg_app.add_handler(CommandHandler("status",cmd_status))
-    tg_app.add_handler(CommandHandler("signal",cmd_signal))
-    tg_app.add_handler(CommandHandler("stats",cmd_stats))
-    tg_app.add_handler(CommandHandler("history",cmd_history))
-    tg_app.add_handler(CommandHandler("balance",cmd_balance))
-    await tg_app.initialize()
-    await tg_app.start()
-    await tg_app.updater.start_polling()
-    await send_tg(
-        "🤖 *Bot Started!*\n"
-        +MARKETS["ETH"]["emoji"]+" ETH *$"+str(state["ETH"]["stats"]["current_margin"])+"*"
-        +" | "+MARKETS["BNB"]["emoji"]+" BNB *$"+str(state["BNB"]["stats"]["current_margin"])+"*\n"
-        "⚡ "+str(LEV)+"x | ALMA+EMA200+ADX | 5min ✅")
-    tasks=[asyncio.create_task(strategy_loop(c)) for c in MARKETS]
-    await asyncio.gather(*tasks)
-
-if __name__=="__main__":
-    asyncio.run(main())
+          
