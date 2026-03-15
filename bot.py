@@ -444,3 +444,36 @@ async def cmd_balance(u,c):
         await u.message.reply_text(msg,parse_mode="Markdown")
     except Exception as e:
         await u.message.reply_text("❌ Balance Error: "+str(e))
+async def main():
+    global tg_app,signer,state
+    for coin in MARKETS:
+        state[coin]={"position":None,"entry_px":0.0,"entry_sz":0.0,
+                     "entry_mg":0.0,"sl_px":0.0,"tp_px":0.0,
+                     "stats":load_stats(coin)}
+    api=lighter.ApiClient(lighter.Configuration(host=BASE_URL))
+    signer=lighter.BlockchainClient(
+        api_client=api,
+        private_key=PRV_KEY,
+        account_index=ACC_IDX,
+        api_key_index=KEY_IDX)
+    await api.close()
+    tg_app=Application.builder().token(TG_TOKEN).build()
+    tg_app.add_handler(CommandHandler("start",cmd_start))
+    tg_app.add_handler(CommandHandler("status",cmd_status))
+    tg_app.add_handler(CommandHandler("signal",cmd_signal))
+    tg_app.add_handler(CommandHandler("stats",cmd_stats))
+    tg_app.add_handler(CommandHandler("history",cmd_history))
+    tg_app.add_handler(CommandHandler("balance",cmd_balance))
+    await tg_app.initialize()
+    await tg_app.start()
+    await tg_app.updater.start_polling()
+    await send_tg(
+        "🤖 *Bot Started!*\n"
+        +MARKETS["ETH"]["emoji"]+" ETH *$"+str(state["ETH"]["stats"]["current_margin"])+"*"
+        +" | "+MARKETS["BNB"]["emoji"]+" BNB *$"+str(state["BNB"]["stats"]["current_margin"])+"*\n"
+        "⚡ "+str(LEV)+"x | ALMA+EMA200+ADX | 5min ✅")
+    tasks=[asyncio.create_task(strategy_loop(c)) for c in MARKETS]
+    await asyncio.gather(*tasks)
+
+if __name__=="__main__":
+    asyncio.run(main())
