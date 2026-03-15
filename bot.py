@@ -424,4 +424,40 @@ async def cmd_history(u,c):
                 icon="✅" if t["pnl"]>=0 else "❌"
                 pct_sg="+" if t.get("pct",0)>=0 else ""
                 msg+=icon+" #"+str(t["no"])+" "+t["side"]+" ["+t["reason"]+"] *"+sg+"$"+str(t["pnl"])+"* ("+pct_sg+str(t.get("pct",0))+"%) → *$"+str(t["new_margin"])+"*\n"
-          
+            msg+="\n"
+    await u.message.reply_text(msg,parse_mode="Markdown")
+
+async def cmd_balance(u,c):
+    try:
+        api=lighter.ApiClient(lighter.Configuration(host=BASE_URL))
+        acc=lighter.AccountApi(api); r=await acc.account(str(ACC_IDX)); await api.close()
+        col=getattr(r,"collateral","?"); upnl=getattr(r,"unrealized_pnl","?")
+        await u.message.reply_text(
+            "💰 *Balance*\nCollateral: *$"+str(col)+"*\nUnrealized: *$"+str(upnl)+"*",
+            parse_mode="Markdown")
+    except Exception as e:
+        await u.message.reply_text("❌ Error: "+str(e))
+
+async def post_init(application):
+    global signer
+    signer=lighter.SignerClient(url=BASE_URL,api_private_keys={KEY_IDX:PRV_KEY},account_index=ACC_IDX)
+    for coin in MARKETS:
+        asyncio.get_event_loop().create_task(strategy_loop(coin))
+
+def main():
+    global tg_app,state
+    for coin in MARKETS:
+        state[coin]={
+            "stats":load_stats(coin),
+            "position":None,
+            "entry_px":0.0,"entry_sz":0.0,
+            "entry_mg":0.0,"sl_px":0.0,"tp_px":0.0
+        }
+    tg_app=Application.builder().token(TG_TOKEN).post_init(post_init).build()
+    for cmd,fn in [("start",cmd_start),("status",cmd_status),("signal",cmd_signal),
+                   ("stats",cmd_stats),("history",cmd_history),("balance",cmd_balance)]:
+        tg_app.add_handler(CommandHandler(cmd,fn))
+    tg_app.run_polling(drop_pending_updates=True)
+
+if __name__=="__main__":
+    main()
