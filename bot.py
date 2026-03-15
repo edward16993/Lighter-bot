@@ -427,4 +427,4 @@ async def cmd_history(u,c):
             msg+="\n"
     await u.message.reply_text(msg,parse_mode="Markdown")
 
-async def cmd_balance(u,c)
+async def cmd_balance(u,c):
