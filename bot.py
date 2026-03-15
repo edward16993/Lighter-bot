@@ -31,7 +31,7 @@ MARKETS={
         "start_margin":float(os.environ.get("ETH_MARGIN","45")),
         "decimals":3,
         "min_size":0.002,
-        "emoji":"💎"
+        "emoji":"ðŸ’Ž"
     },
     "BNB":{
         "symbol":"BNB-USDT-SWAP",
@@ -40,7 +40,7 @@ MARKETS={
         "start_margin":float(os.environ.get("BNB_MARGIN","10")),
         "decimals":2,
         "min_size":0.02,
-        "emoji":"🟡"
+        "emoji":"ðŸŸ¡"
     }
 }
 
@@ -156,7 +156,7 @@ def record_close(coin,exit_px,reason,side):
         "time":datetime.now().strftime("%Y-%m-%d %H:%M")})
     st["history"]=st["history"][-20:]
     save_stats(coin)
-    return pnl,pnl_pct,new_m,"✅ WIN" if pnl>=0 else "❌ LOSS"
+    return pnl,pnl_pct,new_m,"âœ… WIN" if pnl>=0 else "âŒ LOSS"
 
 async def send_tg(msg):
     try: await tg_app.bot.send_message(chat_id=TG_CHAT,text=msg,parse_mode="Markdown")
@@ -170,7 +170,7 @@ async def strategy_loop(coin):
     try:
         api=lighter.ApiClient(lighter.Configuration(host=BASE_URL))
         acc=lighter.AccountApi(api)
-        r=await acc.account(str(ACC_IDX)); await api.close()
+        r=await acc.account(ACC_IDX); await api.close()
         for pos2 in (getattr(r,"positions",[]) or []):
             if getattr(pos2,"market_index",-1)==mkt["market_id"]:
                 sz=float(getattr(pos2,"base_amount",0) or 0)
@@ -205,10 +205,10 @@ async def strategy_loop(coin):
                     mg=s["stats"]["current_margin"]; si=calc_size(coin,mg,price)
                     nsl=round(price-(SL_MULT*atr),2); ntp=round(price+(TP_MULT*atr),2)
                     await send_tg(
-                        em+" *"+coin+" LONG Signal!* 📈\n"
-                        "💵 Price: *$"+str(round(price,2))+"* | ADX: *"+str(round(adx,1))+"*\n"
-                        "🛡 SL: *$"+str(nsl)+"* | 🎯 TP: *$"+str(ntp)+"*\n"
-                        "💰 Margin: *$"+str(mg)+"* x "+str(LEV)+"x")
+                        em+" *"+coin+" LONG Signal!* ðŸ“ˆ\n"
+                        "ðŸ’µ Price: *$"+str(round(price,2))+"* | ADX: *"+str(round(adx,1))+"*\n"
+                        "ðŸ›¡ SL: *$"+str(nsl)+"* | ðŸŽ¯ TP: *$"+str(ntp)+"*\n"
+                        "ðŸ’° Margin: *$"+str(mg)+"* x "+str(LEV)+"x")
                     try:
                         await place_order(coin,"BUY",si,price)
                         s["position"]="LONG"; s["entry_px"]=price
@@ -220,22 +220,22 @@ async def strategy_loop(coin):
                         s["stats"]["long_trades"]=s["stats"].get("long_trades",0)+1
                         save_stats(coin)
                         await send_tg(
-                            "✅ "+em+" *"+coin+" LONG Opened!*\n"
-                            "📍 Entry: *$"+str(round(price,2))+"* | Size: *"+str(si)+" "+coin+"*\n"
-                            "🛡 SL: *$"+str(nsl)+"* | 🎯 TP: *$"+str(ntp)+"*\n"
-                            "💰 Margin: *$"+str(mg)+"*")
+                            "âœ… "+em+" *"+coin+" LONG Opened!*\n"
+                            "ðŸ“ Entry: *$"+str(round(price,2))+"* | Size: *"+str(si)+" "+coin+"*\n"
+                            "ðŸ›¡ SL: *$"+str(nsl)+"* | ðŸŽ¯ TP: *$"+str(ntp)+"*\n"
+                            "ðŸ’° Margin: *$"+str(mg)+"*")
                     except Exception as e:
                         s["position"]=None
-                        await send_tg("⚠️ "+em+" "+coin+" LONG Failed: "+str(e))
+                        await send_tg("âš ï¸ "+em+" "+coin+" LONG Failed: "+str(e))
 
                 elif short_sig and s["stats"]["current_margin"]>=MIN_MAR:
                     mg=s["stats"]["current_margin"]; si=calc_size(coin,mg,price)
                     nsl=round(price+(SL_MULT*atr),2); ntp=round(price-(TP_MULT*atr),2)
                     await send_tg(
-                        em+" *"+coin+" SHORT Signal!* 📉\n"
-                        "💵 Price: *$"+str(round(price,2))+"* | ADX: *"+str(round(adx,1))+"*\n"
-                        "🛡 SL: *$"+str(nsl)+"* | 🎯 TP: *$"+str(ntp)+"*\n"
-                        "💰 Margin: *$"+str(mg)+"* x "+str(LEV)+"x")
+                        em+" *"+coin+" SHORT Signal!* ðŸ“‰\n"
+                        "ðŸ’µ Price: *$"+str(round(price,2))+"* | ADX: *"+str(round(adx,1))+"*\n"
+                        "ðŸ›¡ SL: *$"+str(nsl)+"* | ðŸŽ¯ TP: *$"+str(ntp)+"*\n"
+                        "ðŸ’° Margin: *$"+str(mg)+"* x "+str(LEV)+"x")
                     try:
                         await place_order(coin,"SELL",si,price)
                         s["position"]="SHORT"; s["entry_px"]=price
@@ -247,13 +247,13 @@ async def strategy_loop(coin):
                         s["stats"]["short_trades"]=s["stats"].get("short_trades",0)+1
                         save_stats(coin)
                         await send_tg(
-                            "✅ "+em+" *"+coin+" SHORT Opened!*\n"
-                            "📍 Entry: *$"+str(round(price,2))+"* | Size: *"+str(si)+" "+coin+"*\n"
-                            "🛡 SL: *$"+str(nsl)+"* | 🎯 TP: *$"+str(ntp)+"*\n"
-                            "💰 Margin: *$"+str(mg)+"*")
+                            "âœ… "+em+" *"+coin+" SHORT Opened!*\n"
+                            "ðŸ“ Entry: *$"+str(round(price,2))+"* | Size: *"+str(si)+" "+coin+"*\n"
+                            "ðŸ›¡ SL: *$"+str(nsl)+"* | ðŸŽ¯ TP: *$"+str(ntp)+"*\n"
+                            "ðŸ’° Margin: *$"+str(mg)+"*")
                     except Exception as e:
                         s["position"]=None
-                        await send_tg("⚠️ "+em+" "+coin+" SHORT Failed: "+str(e))
+                        await send_tg("âš ï¸ "+em+" "+coin+" SHORT Failed: "+str(e))
 
             elif s["position"]=="LONG":
                 unr=round((price-s["entry_px"])*s["entry_sz"],4)
@@ -263,12 +263,12 @@ async def strategy_loop(coin):
                 elif price<=s["sl_px"]: reason="SL"
                 elif bear_cross: reason="Cross"
                 if reason:
-                    icon="🎯" if reason=="TP" else "🛑" if reason=="SL" else "🔄"
+                    icon="ðŸŽ¯" if reason=="TP" else "ðŸ›‘" if reason=="SL" else "ðŸ”„"
                     sg="+" if unr>=0 else ""
                     await send_tg(
                         icon+" "+em+" *"+coin+" LONG "+reason+"!*\n"
-                        "💵 Price: *$"+str(round(price,2))+"*\n"
-                        "📊 Unrealized: *"+sg+"$"+str(unr)+"* ("+sg+str(unr_pct)+"%)")
+                        "ðŸ’µ Price: *$"+str(round(price,2))+"*\n"
+                        "ðŸ“Š Unrealized: *"+sg+"$"+str(unr)+"* ("+sg+str(unr_pct)+"%)")
                     try:
                         await place_order(coin,"SELL",s["entry_sz"],price,reduce_only=True)
                         pnl,pnl_pct,new_m,outcome=record_close(coin,price,reason,"LONG")
@@ -276,12 +276,12 @@ async def strategy_loop(coin):
                         sg="+" if pnl>=0 else ""
                         await send_tg(
                             outcome+" "+em+" *"+coin+" LONG #"+str(s["stats"]["total_trades"])+"* ["+reason+"]\n"
-                            "📍 Entry: *$"+str(s["entry_px"])+"* → Exit: *$"+str(round(price,2))+"*\n"
-                            "💵 PnL: *"+sg+"$"+str(pnl)+"* ("+sg+str(pnl_pct)+"%)\n"
-                            "📊 WR: *"+str(wr)+"%* | 💰 Margin: *$"+str(new_m)+"*")
+                            "ðŸ“ Entry: *$"+str(s["entry_px"])+"* â†’ Exit: *$"+str(round(price,2))+"*\n"
+                            "ðŸ’µ PnL: *"+sg+"$"+str(pnl)+"* ("+sg+str(pnl_pct)+"%)\n"
+                            "ðŸ“Š WR: *"+str(wr)+"%* | ðŸ’° Margin: *$"+str(new_m)+"*")
                         s["position"]=None
                     except Exception as e:
-                        await send_tg("⚠️ "+em+" "+coin+" LONG Close Failed: "+str(e))
+                        await send_tg("âš ï¸ "+em+" "+coin+" LONG Close Failed: "+str(e))
 
             elif s["position"]=="SHORT":
                 unr=round((s["entry_px"]-price)*s["entry_sz"],4)
@@ -291,12 +291,12 @@ async def strategy_loop(coin):
                 elif price>=s["sl_px"]: reason="SL"
                 elif bull_cross: reason="Cross"
                 if reason:
-                    icon="🎯" if reason=="TP" else "🛑" if reason=="SL" else "🔄"
+                    icon="ðŸŽ¯" if reason=="TP" else "ðŸ›‘" if reason=="SL" else "ðŸ”„"
                     sg="+" if unr>=0 else ""
                     await send_tg(
                         icon+" "+em+" *"+coin+" SHORT "+reason+"!*\n"
-                        "💵 Price: *$"+str(round(price,2))+"*\n"
-                        "📊 Unrealized: *"+sg+"$"+str(unr)+"* ("+sg+str(unr_pct)+"%)")
+                        "ðŸ’µ Price: *$"+str(round(price,2))+"*\n"
+                        "ðŸ“Š Unrealized: *"+sg+"$"+str(unr)+"* ("+sg+str(unr_pct)+"%)")
                     try:
                         await place_order(coin,"BUY",s["entry_sz"],price,reduce_only=True)
                         pnl,pnl_pct,new_m,outcome=record_close(coin,price,reason,"SHORT")
@@ -304,31 +304,31 @@ async def strategy_loop(coin):
                         sg="+" if pnl>=0 else ""
                         await send_tg(
                             outcome+" "+em+" *"+coin+" SHORT #"+str(s["stats"]["total_trades"])+"* ["+reason+"]\n"
-                            "📍 Entry: *$"+str(s["entry_px"])+"* → Exit: *$"+str(round(price,2))+"*\n"
-                            "💵 PnL: *"+sg+"$"+str(pnl)+"* ("+sg+str(pnl_pct)+"%)\n"
-                            "📊 WR: *"+str(wr)+"%* | 💰 Margin: *$"+str(new_m)+"*")
+                            "ðŸ“ Entry: *$"+str(s["entry_px"])+"* â†’ Exit: *$"+str(round(price,2))+"*\n"
+                            "ðŸ’µ PnL: *"+sg+"$"+str(pnl)+"* ("+sg+str(pnl_pct)+"%)\n"
+                            "ðŸ“Š WR: *"+str(wr)+"%* | ðŸ’° Margin: *$"+str(new_m)+"*")
                         s["position"]=None
                     except Exception as e:
-                        await send_tg("⚠️ "+em+" "+coin+" SHORT Close Failed: "+str(e))
+                        await send_tg("âš ï¸ "+em+" "+coin+" SHORT Close Failed: "+str(e))
 
         except Exception as e:
             logger.error("%s loop error: %s",coin,e)
-            await send_tg("⚠️ "+em+" "+coin+" Error: "+str(e))
+            await send_tg("âš ï¸ "+em+" "+coin+" Error: "+str(e))
 
         await asyncio.sleep(INTERVAL)
 
 async def cmd_start(u,c):
-    msg="🤖 *ALMA Dual Bot*\n"
+    msg="ðŸ¤– *ALMA Dual Bot*\n"
     for coin in MARKETS:
         s=state[coin]; em=MARKETS[coin]["emoji"]
-        ps=s["position"] if s["position"] else "⚪ Wait"
+        ps=s["position"] if s["position"] else "âšª Wait"
         mg=s["stats"]["current_margin"]
-        msg+=em+" *"+coin+"*: "+ps+" | 💰 *$"+str(mg)+"*\n"
+        msg+=em+" *"+coin+"*: "+ps+" | ðŸ’° *$"+str(mg)+"*\n"
     msg+="\n/status /signal /stats /history /balance"
     await u.message.reply_text(msg,parse_mode="Markdown")
 
 async def cmd_status(u,c):
-    msg="📊 *Market Status*\n\n"
+    msg="ðŸ“Š *Market Status*\n\n"
     for coin in MARKETS:
         mkt=MARKETS[coin]; em=mkt["emoji"]; s=state[coin]
         try:
@@ -337,29 +337,29 @@ async def cmd_status(u,c):
             price=float(curr["close"]); ema200=round(float(curr["ema200"]),2)
             atr=round(float(curr["atr"]),2); rsi=round(float(curr["rsi"]),1)
             adx=round(float(curr["adx"]),1)
-            trend="🟢 Bull" if price>ema200 else "🔴 Bear"
-            adx_s="📈 Trending" if adx>ADX_MIN else "😴 Sideways"
-            ps=s["position"] if s["position"] else "⚪ Wait"
+            trend="ðŸŸ¢ Bull" if price>ema200 else "ðŸ”´ Bear"
+            adx_s="ðŸ“ˆ Trending" if adx>ADX_MIN else "ðŸ˜´ Sideways"
+            ps=s["position"] if s["position"] else "âšª Wait"
             extra=""
             if s["position"] and s["entry_px"]>0:
                 if s["position"]=="LONG": unr=round((price-s["entry_px"])*s["entry_sz"],4)
                 else: unr=round((s["entry_px"]-price)*s["entry_sz"],4)
                 unr_pct=round(unr/s["entry_mg"]*100,2) if s["entry_mg"]>0 else 0
                 sg="+" if unr>=0 else ""
-                extra=("\n📊 Unrealized: *"+sg+"$"+str(unr)+"* ("+sg+str(unr_pct)+"%)"
-                    "\n🛡 SL: *$"+str(s["sl_px"])+"* | 🎯 TP: *$"+str(s["tp_px"])+"*")
-            msg+=(em+" *"+coin+"* | 💵 *$"+str(round(price,2))+"* | "+trend+"\n"
+                extra=("\nðŸ“Š Unrealized: *"+sg+"$"+str(unr)+"* ("+sg+str(unr_pct)+"%)"
+                    "\nðŸ›¡ SL: *$"+str(s["sl_px"])+"* | ðŸŽ¯ TP: *$"+str(s["tp_px"])+"*")
+            msg+=(em+" *"+coin+"* | ðŸ’µ *$"+str(round(price,2))+"* | "+trend+"\n"
                 "RSI: *"+str(rsi)+"* | ATR: *$"+str(atr)+"*\n"
                 "ADX: *"+str(adx)+"* | "+adx_s+"\n"
                 "EMA200: *$"+str(ema200)+"*\n"
                 "Position: *"+ps+"*"+extra+"\n"
-                "💰 Margin: *$"+str(s["stats"]["current_margin"])+"*\n\n")
+                "ðŸ’° Margin: *$"+str(s["stats"]["current_margin"])+"*\n\n")
         except Exception as e:
-            msg+=em+" *"+coin+"* ❌ "+str(e)+"\n\n"
+            msg+=em+" *"+coin+"* âŒ "+str(e)+"\n\n"
     await u.message.reply_text(msg,parse_mode="Markdown")
 
 async def cmd_signal(u,c):
-    msg="🎯 *Signals*\n\n"
+    msg="ðŸŽ¯ *Signals*\n\n"
     for coin in MARKETS:
         em=MARKETS[coin]["emoji"]
         try:
@@ -371,47 +371,47 @@ async def cmd_signal(u,c):
             bull_cross=(curr["fast"]>curr["slow"]) and (prev["fast"]<=prev["slow"])
             bear_cross=(curr["fast"]<curr["slow"]) and (prev["fast"]>=prev["slow"])
             bull_trend=price>float(curr["ema200"]); trending=adx>ADX_MIN
-            adx_s="📈 Trending" if trending else "😴 Sideways"
+            adx_s="ðŸ“ˆ Trending" if trending else "ðŸ˜´ Sideways"
             if bull_cross and bull_trend and trending:
-                sig="🚨 LONG NOW!\n🛡 SL: *$"+str(round(price-SL_MULT*atr,2))+"* 🎯 TP: *$"+str(round(price+TP_MULT*atr,2))+"*"
+                sig="ðŸš¨ LONG NOW!\nðŸ›¡ SL: *$"+str(round(price-SL_MULT*atr,2))+"* ðŸŽ¯ TP: *$"+str(round(price+TP_MULT*atr,2))+"*"
             elif bear_cross and rsi<50 and trending:
-                sig="🚨 SHORT NOW!\n🛡 SL: *$"+str(round(price+SL_MULT*atr,2))+"* 🎯 TP: *$"+str(round(price-TP_MULT*atr,2))+"*"
+                sig="ðŸš¨ SHORT NOW!\nðŸ›¡ SL: *$"+str(round(price+SL_MULT*atr,2))+"* ðŸŽ¯ TP: *$"+str(round(price-TP_MULT*atr,2))+"*"
             elif bull_cross and bull_trend and not trending:
-                sig="⚠️ LONG blocked - ADX low"
+                sig="âš ï¸ LONG blocked - ADX low"
             elif bear_cross and rsi<50 and not trending:
-                sig="⚠️ SHORT blocked - ADX low"
+                sig="âš ï¸ SHORT blocked - ADX low"
             elif bull_trend and curr["fast"]>curr["slow"]:
-                sig="🟡 Bullish - Wait cross"
+                sig="ðŸŸ¡ Bullish - Wait cross"
             elif rsi<50 and curr["fast"]<curr["slow"]:
-                sig="🟡 Bearish - Wait cross"
+                sig="ðŸŸ¡ Bearish - Wait cross"
             else:
-                sig="⚪ No signal"
-            msg+=(em+" *"+coin+"* | 💵 *$"+str(round(price,2))+"*\n"
+                sig="âšª No signal"
+            msg+=(em+" *"+coin+"* | ðŸ’µ *$"+str(round(price,2))+"*\n"
                 "RSI: *"+str(rsi)+"* | ADX: *"+str(adx)+"* "+adx_s+"\n"
                 +sig+"\n\n")
         except Exception as e:
-            msg+=em+" *"+coin+"* ❌ "+str(e)+"\n\n"
+            msg+=em+" *"+coin+"* âŒ "+str(e)+"\n\n"
     await u.message.reply_text(msg,parse_mode="Markdown")
 
 async def cmd_stats(u,c):
-    msg="📊 *Stats*\n\n"
+    msg="ðŸ“Š *Stats*\n\n"
     for coin in MARKETS:
         em=MARKETS[coin]["emoji"]; s=state[coin]["stats"]
         t=s["total_trades"]; wr=round(s["wins"]/max(t,1)*100,1)
         sm=MARKETS[coin]["start_margin"]
         g=round((s["current_margin"]-sm)/sm*100,1)
         lt=s.get("long_trades",0); sh=s.get("short_trades",0)
-        sg="+" if g>=0 else ""; icon="✅" if g>=0 else "❌"
+        sg="+" if g>=0 else ""; icon="âœ…" if g>=0 else "âŒ"
         msg+=(em+" *"+coin+"*\n"
             "Trades: *"+str(t)+"* (L:"+str(lt)+" S:"+str(sh)+")\n"
             "WR: *"+str(wr)+"%* | "+icon+" *"+sg+str(g)+"%*\n"
             "PnL: *$"+str(round(s["total_pnl"],4))+"*\n"
-            "💰 Margin: *$"+str(s["current_margin"])+"*\n"
-            "🏆 Peak: *$"+str(s["peak_margin"])+"*\n\n")
+            "ðŸ’° Margin: *$"+str(s["current_margin"])+"*\n"
+            "ðŸ† Peak: *$"+str(s["peak_margin"])+"*\n\n")
     await u.message.reply_text(msg,parse_mode="Markdown")
 
 async def cmd_history(u,c):
-    msg="📜 *History*\n\n"
+    msg="ðŸ“œ *History*\n\n"
     for coin in MARKETS:
         em=MARKETS[coin]["emoji"]
         h=state[coin]["stats"].get("history",[])
@@ -421,53 +421,62 @@ async def cmd_history(u,c):
         else:
             for t in reversed(h[-5:]):
                 sg="+" if t["pnl"]>=0 else ""
-                icon="✅" if t["pnl"]>=0 else "❌"
+                icon="âœ…" if t["pnl"]>=0 else "âŒ"
                 pct_sg="+" if t.get("pct",0)>=0 else ""
-                msg+=icon+" #"+str(t["no"])+" "+t["side"]+" ["+t["reason"]+"] *"+sg+"$"+str(t["pnl"])+"* ("+pct_sg+str(t.get("pct",0))+"%) → *$"+str(t["new_margin"])+"*\n"
+                msg+=icon+" #"+str(t["no"])+" "+t["side"]+" ["+t["reason"]+"] *"+sg+"$"+str(t["pnl"])+"* ("+pct_sg+str(t.get("pct",0))+"%) â†’ *$"+str(t["new_margin"])+"*\n"
             msg+="\n"
     await u.message.reply_text(msg,parse_mode="Markdown")
 
 async def cmd_balance(u,c):
     try:
         api=lighter.ApiClient(lighter.Configuration(host=BASE_URL))
-        acc=lighter.AccountApi(api); r=await acc.account(str(ACC_IDX)); await api.close()
-        col=getattr(r,"collateral","?"); upnl=getattr(r,"unrealized_pnl","?")
-        await u.message.reply_text(
-            "💰 *Balance*\nCollateral: *$"+str(col)+"*\nUnrealized: *$"+str(upnl)+"*",
-            parse_mode="Markdown")
+        acc=lighter.AccountApi(api)
+        r=await acc.account(ACC_IDX)
+        await api.close()
+        equity=getattr(r,"equity",None) or getattr(r,"total_equity",None) or "N/A"
+        avail=getattr(r,"available_balance",None) or getattr(r,"free_collateral",None) or "N/A"
+        msg="ðŸ’° *Account Balance*\n\n"
+        msg+="ðŸ’Ž Equity: *$"+str(equity)+"*\n"
+        msg+="âœ… Available: *$"+str(avail)+"*\n\n"
+        for coin in MARKETS:
+            s=state[coin]["stats"]; em=MARKETS[coin]["emoji"]
+            msg+=em+" *"+coin+"* Margin: *$"+str(s["current_margin"])+"*\n"
+        await u.message.reply_text(msg,parse_mode="Markdown")
     except Exception as e:
-        await u.message.reply_text("❌ Error: "+str(e))
-
-async def post_init(application):
-    global signer
-    signer=lighter.SignerClient(url=BASE_URL,api_private_keys={KEY_IDX:PRV_KEY},account_index=ACC_IDX)
-    lines=["\U0001f916 *ALMA Dual Bot Started!*"]
-    for coin in MARKETS:
-        em=MARKETS[coin]["emoji"]
-        mg=state[coin]["stats"]["current_margin"]
-        lines.append(em+" *"+coin+"*: Wait | $"+str(mg))
-    lines.append("SL:"+str(SL_MULT)+"x TP:"+str(TP_MULT)+"x")
-    await application.bot.send_message(chat_id=TG_CHAT,text="\n".join(lines),parse_mode="Markdown")
-    for coin in MARKETS:
-        asyncio.get_event_loop().create_task(strategy_loop(coin))
+        await u.message.reply_text("âŒ Balance Error: "+str(e))
 
 async def main():
-    global tg_app,state
+    global tg_app,signer,state
+
     for coin in MARKETS:
-        state[coin]={
-            "stats":load_stats(coin),
-            "position":None,
-            "entry_px":0.0,"entry_sz":0.0,
-            "entry_mg":0.0,"sl_px":0.0,"tp_px":0.0
-        }
-    tg_app=Application.builder().token(TG_TOKEN).post_init(post_init).build()
-    for cmd,fn in [("start",cmd_start),("status",cmd_status),("signal",cmd_signal),
-                   ("stats",cmd_stats),("history",cmd_history),("balance",cmd_balance)]:
-        tg_app.add_handler(CommandHandler(cmd,fn))
+        state[coin]={"position":None,"entry_px":0.0,"entry_sz":0.0,
+                     "entry_mg":0.0,"sl_px":0.0,"tp_px":0.0,
+                     "stats":load_stats(coin)}
+
+    api=lighter.ApiClient(lighter.Configuration(host=BASE_URL))
+    signer=lighter.Signer(api,PRV_KEY,ACC_IDX,KEY_IDX)
+    await api.close()
+
+    tg_app=Application.builder().token(TG_TOKEN).build()
+    tg_app.add_handler(CommandHandler("start",cmd_start))
+    tg_app.add_handler(CommandHandler("status",cmd_status))
+    tg_app.add_handler(CommandHandler("signal",cmd_signal))
+    tg_app.add_handler(CommandHandler("stats",cmd_stats))
+    tg_app.add_handler(CommandHandler("history",cmd_history))
+    tg_app.add_handler(CommandHandler("balance",cmd_balance))
+
     await tg_app.initialize()
     await tg_app.start()
-    await tg_app.updater.start_polling(drop_pending_updates=True)
-    await asyncio.Event().wait()
+    await tg_app.updater.start_polling()
+
+    await send_tg(
+        "ðŸ¤– *Bot Started!*\n"
+        +MARKETS["ETH"]["emoji"]+" ETH *$"+str(state["ETH"]["stats"]["current_margin"])+"*"
+        +" | "+MARKETS["BNB"]["emoji"]+" BNB *$"+str(state["BNB"]["stats"]["current_margin"])+"*\n"
+        "âš¡ "+str(LEV)+"x | ALMA+EMA200+ADX | 5min âœ…")
+
+    tasks=[asyncio.create_task(strategy_loop(c)) for c in MARKETS]
+    await asyncio.gather(*tasks)
 
 if __name__=="__main__":
     asyncio.run(main())
