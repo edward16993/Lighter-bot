@@ -441,6 +441,13 @@ async def cmd_balance(u,c):
 async def post_init(application):
     global signer
     signer=lighter.SignerClient(url=BASE_URL,api_private_keys={KEY_IDX:PRV_KEY},account_index=ACC_IDX)
+    lines=["\U0001f916 *ALMA Dual Bot Started!*"]
+    for coin in MARKETS:
+        em=MARKETS[coin]["emoji"]
+        mg=state[coin]["stats"]["current_margin"]
+        lines.append(em+" *"+coin+"*: Wait | $"+str(mg))
+    lines.append("SL:"+str(SL_MULT)+"x TP:"+str(TP_MULT)+"x")
+    await application.bot.send_message(chat_id=TG_CHAT,text="\n".join(lines),parse_mode="Markdown")
     for coin in MARKETS:
         asyncio.get_event_loop().create_task(strategy_loop(coin))
 
