@@ -428,3 +428,19 @@ async def cmd_history(u,c):
     await u.message.reply_text(msg,parse_mode="Markdown")
 
 async def cmd_balance(u,c):
+    try:
+        api=lighter.ApiClient(lighter.Configuration(host=BASE_URL))
+        acc=lighter.AccountApi(api)
+        r=await acc.account(ACC_IDX)
+        await api.close()
+        equity=getattr(r,"equity",None) or getattr(r,"total_equity",None) or "N/A"
+        avail=getattr(r,"available_balance",None) or getattr(r,"free_collateral",None) or "N/A"
+        msg="💰 *Account Balance*\n\n"
+        msg+="💎 Equity: *$"+str(equity)+"*\n"
+        msg+="✅ Available: *$"+str(avail)+"*\n\n"
+        for coin in MARKETS:
+            s=state[coin]["stats"]; em=MARKETS[coin]["emoji"]
+            msg+=em+" *"+coin+"* Margin: *$"+str(s["current_margin"])+"*\n"
+        await u.message.reply_text(msg,parse_mode="Markdown")
+    except Exception as e:
+        await u.message.reply_text("❌ Balance Error: "+str(e))
