@@ -1,5 +1,0 @@
-lighter-sdk
-python-telegram-bot[httpx]==21.9
-pandas
-httpx
-numpy
